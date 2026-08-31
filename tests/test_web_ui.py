@@ -696,6 +696,10 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn("Релизы еще не проверялись. Обновление из UI", html)
         self.assertNotIn("Установить выбранное обновление", html)
         self.assertIn("debug_stdout", html)
+        self.assertIn("settings-discovery-engine", html)
+        self.assertIn("finder-discovery-engine", html)
+        self.assertIn("export-nfconf", html)
+        self.assertIn("/api/core/strategy-discovery/export-nfconf", html)
         self.assertIn("/api/core/run-settings", html)
         self.assertIn("/api/core/run-settings/save", html)
         self.assertIn("fetchSettingsPayload", html)
@@ -2732,6 +2736,16 @@ window.addEventListener('load', async () => {
                         "cleanup": {"source_deleted": True},
                     },
                 ),
+                mock.patch.object(
+                    web_app,
+                    "export_nfconf",
+                    return_value={
+                        "engine": "blockchecks",
+                        "out_dir": "/tmp/nfconf-out",
+                        "paths": ["/tmp/nfconf-out/nfqws2.conf"],
+                        "db": "/tmp/state.db",
+                    },
+                ),
             ):
                 port = start_server(serve, config).port
 
@@ -2741,6 +2755,7 @@ window.addEventListener('load', async () => {
                     ("POST", "/api/auth/change-password", {"current_password": "admin", "new_password": "short"}, {}),
                     ("GET", "/api/core/status", None, {}),
                     ("POST", "/api/core/strategy-discovery/start-run", {"mode": "bad", "domains": ["youtube.com"]}, {}),
+                    ("POST", "/api/core/strategy-discovery/export-nfconf", {"limit": 1}, {}),
                     ("POST", "/api/core/strategy-discovery/stop-current-run", {"dry_run": True}, {}),
                     ("GET", "/api/core/strategy-discovery/current-run-progress", None, {}),
                     ("GET", "/api/core/strategy-discovery/current-run-latest-log", None, {}),
@@ -2824,6 +2839,7 @@ window.addEventListener('load', async () => {
                         "curl_max_time_doh",
                         "enable_ipv6",
                         "debug_stdout",
+                        "discovery_engine",
                     },
                     ("POST", "/api/core/run-settings/save"): {
                         "curl_parallelism_default",
@@ -2833,6 +2849,7 @@ window.addEventListener('load', async () => {
                         "curl_max_time_doh",
                         "enable_ipv6",
                         "debug_stdout",
+                        "discovery_engine",
                     },
                     ("GET", "/api/core/runs/history"): {"runs"},
                     ("GET", "/api/core/runs/latest-log"): {"stdout_tail", "stderr_tail", "progress"},
@@ -2947,6 +2964,16 @@ window.addEventListener('load', async () => {
             with (
                 mock.patch.object(web_app, "run_multi_domain_discovery", return_value={"status": "success"}),
                 mock.patch.object(web_app, "run_standard_discovery", return_value={"status": "success"}),
+                mock.patch.object(
+                    web_app,
+                    "export_nfconf",
+                    return_value={
+                        "engine": "blockchecks",
+                        "out_dir": "/tmp/nfconf-out",
+                        "paths": ["/tmp/nfconf-out/nfqws2.conf"],
+                        "db": "/tmp/state.db",
+                    },
+                ),
                 mock.patch.object(web_app.service_api, "release_channel_info", return_value=release),
                 mock.patch.object(web_app.service_api, "fetch_v2fly_revision", return_value="remote-test-revision"),
                 mock.patch.object(web_app.service_api, "prepare_v2fly_local_storage", return_value={"count": 0}),
