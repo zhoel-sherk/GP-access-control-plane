@@ -2031,6 +2031,33 @@ class WebUiTests(unittest.TestCase):
             self.assertIn('<link rel="stylesheet" href="/static/css/', html)
             self.assertIn('<script src="/static/js/', html)
 
+    def test_static_assets_are_served_immutable_with_no_inline_production_output(self) -> None:
+        with _captured_server_temporary_directory() as (raw, start_server):
+            tmp = Path(raw)
+            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
+            port = start_server(serve, config).port
+
+            status, headers, body = _http_request(port, "/")
+            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            html = body.decode("utf-8", errors="replace")
+            self.assertEqual(html.count("<style>"), 0)
+            self.assertEqual(html.count("<script>"), 0)
+
+            asset_urls: list[str] = []
+            for subdir in ("css", "js"):
+                for name in sorted(p.name for p in (static_root() / subdir).glob("*") if p.is_file()):
+                    self.assertIn(f"/static/{subdir}/{name}?v=", html, name)
+                    asset_urls.append(f"/static/{subdir}/{name}?v=guard")
+
+            for url in asset_urls:
+                status, headers, _body = _http_request(port, url, authenticated=False)
+                self.assertEqual(status, 200, url)
+                self.assertTrue(
+                    headers.get("cache-control", "").startswith("public, max-age=31536000, immutable"),
+                    (url, headers.get("cache-control")),
+                )
+
     def test_openapi_paths_are_callable_through_web_runtime(self) -> None:
         self._run_web_runtime_openapi_contract()
 
