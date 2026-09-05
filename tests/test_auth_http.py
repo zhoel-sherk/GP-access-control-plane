@@ -26,7 +26,6 @@ from gp_control_plane.backups import (  # noqa: E402
 from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.storage import StorageUnavailableError, append_run, db_path
 from gp_control_plane.web.api_server import serve
-from gp_control_plane.web.proxy import serve_web_proxy
 
 _PROCESS_TIMEOUT_SECONDS = 15
 
@@ -314,76 +313,11 @@ class BearerAuthHttpTests(unittest.TestCase):
                     } else [{"bearerAuth": []}]
                     self.assertEqual(operation.get("security", contract["security"]), expected, f"{method.upper()} {path}")
 
-    def test_split_proxy_forwards_auth_and_rotates_shared_tokens(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core_port = _start_server(serve, config, ui_enabled=False)
-            proxy_port = _start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}")
-
-            for path in ("/", "/swagger", "/openapi.json", "/api/health"):
-                status, _headers, _body = _request(proxy_port, path)
-                self.assertEqual(status, 200, path)
-            status, _headers, _body = _request(proxy_port, "/api/web/events/stream")
-            self.assertEqual(status, 401)
-            status, _headers, _body = _request(proxy_port, "/api/core/strategy-discovery/current-run-progress")
-            self.assertEqual(status, 401)
-
-            status, _headers, body = _request(
-                proxy_port,
-                "/api/auth/login",
-                method="POST",
-                body=_json_bytes({"username": "admin", "password": "admin"}),
-                headers={"Content-Type": "application/json"},
-            )
-            self.assertEqual(status, 200)
-            old_token = json.loads(body)["access_token"]
-            old_bearer = {"Authorization": f"Bearer {old_token}"}
-            status, _headers, _body = _request(proxy_port, "/api/core/strategy-discovery/current-run-progress", headers=old_bearer)
-            self.assertEqual(status, 200)
-            status, _headers, body = _request(
-                proxy_port,
-                "/api/auth/change-password",
-                method="POST",
-                body=_json_bytes({"current_password": "admin", "new_password": "newpass8"}),
-                headers={**old_bearer, "Content-Type": "application/json"},
-            )
-            self.assertEqual(status, 200)
-            new_token = json.loads(body)["access_token"]
-            status, _headers, _body = _request(proxy_port, "/api/core/strategy-discovery/current-run-progress", headers=old_bearer)
-            self.assertEqual(status, 401)
-            status, _headers, _body = _request(
-                proxy_port,
-                "/api/core/strategy-discovery/current-run-progress",
-                headers={"Authorization": f"Bearer {new_token}"},
-            )
-            self.assertEqual(status, 200)
-            status, _headers, body = _request(
-                proxy_port,
-                "/api/auth/change-password",
-                method="POST",
-                body=_json_bytes({"current_password": "newpass8", "new_password": "admin"}),
-                headers={"Authorization": f"Bearer {new_token}", "Content-Type": "application/json"},
-            )
-            self.assertEqual(status, 200, body)
-            reset_token = json.loads(body)["access_token"]
-            self.assertEqual(
-                _request(proxy_port, "/api/core/strategy-discovery/current-run-progress", headers={"Authorization": f"Bearer {new_token}"})[0],
-                401,
-            )
-            self.assertEqual(
-                _request(proxy_port, "/api/auth/login", method="POST", body=_json_bytes({"username": "admin", "password": "admin"}), headers={"Content-Type": "application/json"})[0],
-                200,
-            )
-            self.assertEqual(
-                _request(proxy_port, "/api/core/strategy-discovery/current-run-progress", headers={"Authorization": f"Bearer {reset_token}"})[0],
-                200,
-            )
 
     def test_invalid_current_password_is_400_without_revoking_bearer_until_successful_rotation(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core = _start_managed_server(serve, config, ui_enabled=False)
-            proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
+            core = _start_managed_server(serve, config)
             try:
                 status, _headers, body = _request(
                     core.port,
@@ -395,7 +329,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                 self.assertEqual(status, 200, body)
                 old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
-                for port in (core.port, proxy.port):
+                for port in (core.port, core.port):
                     status, _headers, body = _request(
                         port,
                         "/api/auth/change-password",
@@ -417,76 +351,13 @@ class BearerAuthHttpTests(unittest.TestCase):
                     headers={**old_bearer, "Content-Type": "application/json"},
                 )
                 self.assertEqual(status, 200, body)
-                for port in (core.port, proxy.port):
+                for port in (core.port, core.port):
                     self.assertEqual(
                         _request(port, "/api/core/strategy-discovery/current-run-progress", headers=old_bearer)[0], 401
                     )
             finally:
-                proxy.close()
                 core.close()
 
-    def test_spawned_core_and_proxy_share_password_rotation_state(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            state_dir = Path(raw) / "state"
-            config = AppConfig(output=OutputConfig(state_dir=state_dir))
-            context = multiprocessing.get_context("spawn")
-            core_port = _free_port()
-            core_ready = context.Event()
-            core_stop = context.Event()
-            core_errors = context.Queue()
-            core_process = context.Process(
-                target=_serve_core_in_process,
-                args=(str(state_dir), core_port, core_ready, core_stop, core_errors),
-                name="spawned-core-server",
-            )
-            proxy: _ManagedServer | None = None
-            core_process.start()
-            try:
-                self.assertTrue(core_ready.wait(timeout=_PROCESS_TIMEOUT_SECONDS))
-                try:
-                    child_error = core_errors.get_nowait()
-                except queue.Empty:
-                    child_error = None
-                self.assertIsNone(child_error, child_error)
-                self.assertEqual(_request(core_port, "/api/health")[0], 200)
-                proxy = _start_managed_server(
-                    serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}"
-                )
-                status, _headers, body = _request(
-                    core_port,
-                    "/api/auth/login",
-                    method="POST",
-                    body=_json_bytes({"username": "admin", "password": "admin"}),
-                    headers={"Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200, body)
-                old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
-                for port in (core_port, proxy.port):
-                    self.assertEqual(
-                        _request(port, "/api/core/strategy-discovery/current-run-progress", headers=old_bearer)[0], 200
-                    )
-
-                status, _headers, body = _request(
-                    core_port,
-                    "/api/auth/change-password",
-                    method="POST",
-                    body=_json_bytes({"current_password": "admin", "new_password": "newpass8"}),
-                    headers={**old_bearer, "Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200, body)
-                fresh_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
-                for port in (core_port, proxy.port):
-                    self.assertEqual(
-                        _request(port, "/api/core/strategy-discovery/current-run-progress", headers=old_bearer)[0], 401
-                    )
-                    self.assertEqual(
-                        _request(port, "/api/core/strategy-discovery/current-run-progress", headers=fresh_bearer)[0], 200
-                    )
-            finally:
-                if proxy is not None:
-                    proxy.close()
-                core_stop.set()
-                _join_process(self, core_process)
 
     def test_active_discovery_can_be_authorized_and_stopped_during_writer_lock(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -524,10 +395,9 @@ class BearerAuthHttpTests(unittest.TestCase):
                 "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                 side_effect=cancel_hook_called.set,
             ):
-                core = _start_managed_server(serve, config, ui_enabled=False)
-                proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
+                core = _start_managed_server(serve, config)
                 try:
-                    for port in (core.port, proxy.port):
+                    for port in (core.port, core.port):
                         job_started.clear()
                         cancellation_observed.clear()
                         cancel_hook_called.clear()
@@ -604,57 +474,43 @@ class BearerAuthHttpTests(unittest.TestCase):
                         self.assertTrue(cancellation_observed.wait(timeout=_PROCESS_TIMEOUT_SECONDS))
                         _wait_for_stopped_run(self, core.port, locked_bearer, run_id)
                 finally:
-                    proxy.close()
                     core.close()
 
     def test_password_rotation_revokes_open_sse_streams(self) -> None:
-        for topology in ("core", "proxy"):
-            with self.subTest(topology=topology), tempfile.TemporaryDirectory() as raw:
-                config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-                servers: list[_ManagedServer] = []
-                connection = response = new_connection = new_response = None
-                try:
-                    core = _start_managed_server(serve, config, ui_enabled=topology == "core")
-                    servers.append(core)
-                    if topology == "core":
-                        port = core.port
-                    else:
-                        proxy = _start_managed_server(
-                            serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}"
-                        )
-                        servers.append(proxy)
-                        port = proxy.port
+        with tempfile.TemporaryDirectory() as raw:
+            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
+            server = _start_managed_server(serve, config)
+            connection = response = new_connection = new_response = None
+            try:
+                status, _headers, body = _request(
+                    server.port, "/api/auth/login", method="POST",
+                    body=_json_bytes({"username": "admin", "password": "admin"}),
+                    headers={"Content-Type": "application/json"},
+                )
+                self.assertEqual(status, 200)
+                old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
 
-                    status, _headers, body = _request(
-                        port, "/api/auth/login", method="POST",
-                        body=_json_bytes({"username": "admin", "password": "admin"}),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    self.assertEqual(status, 200)
-                    old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
+                connection, response = _open_sse(server.port, old_bearer)
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader("Content-Type"), "text/event-stream; charset=utf-8")
+                status, _headers, body = _request(
+                    server.port, "/api/auth/change-password", method="POST",
+                    body=_json_bytes({"current_password": "admin", "new_password": "newpass8"}),
+                    headers={**old_bearer, "Content-Type": "application/json"},
+                )
+                self.assertEqual(status, 200)
+                new_token = json.loads(body)["access_token"]
+                status, _headers, _body = _request(server.port, "/api/web/events/stream", headers=old_bearer)
+                self.assertEqual(status, 401)
+                self.assertIsInstance(response.read(), bytes)
+                self.assertTrue(response.isclosed())
 
-                    connection, response = _open_sse(port, old_bearer)
-                    self.assertEqual(response.status, 200)
-                    self.assertEqual(response.getheader("Content-Type"), "text/event-stream; charset=utf-8")
-                    status, _headers, body = _request(
-                        port, "/api/auth/change-password", method="POST",
-                        body=_json_bytes({"current_password": "admin", "new_password": "newpass8"}),
-                        headers={**old_bearer, "Content-Type": "application/json"},
-                    )
-                    self.assertEqual(status, 200)
-                    new_token = json.loads(body)["access_token"]
-                    status, _headers, _body = _request(port, "/api/web/events/stream", headers=old_bearer)
-                    self.assertEqual(status, 401)
-                    self.assertIsInstance(response.read(), bytes)
-                    self.assertTrue(response.isclosed())
-
-                    new_connection, new_response = _open_sse(port, {"Authorization": f"Bearer {new_token}"})
-                    self.assertEqual(new_response.status, 200)
-                finally:
-                    _close_sse(new_connection, new_response)
-                    _close_sse(connection, response)
-                    for server in reversed(servers):
-                        server.close()
+                new_connection, new_response = _open_sse(server.port, {"Authorization": f"Bearer {new_token}"})
+                self.assertEqual(new_response.status, 200)
+            finally:
+                _close_sse(new_connection, new_response)
+                _close_sse(connection, response)
+                server.close()
 
     def test_storage_unavailable_is_a_normalized_503_from_core_and_proxy(self) -> None:
         for error in (
@@ -665,8 +521,7 @@ class BearerAuthHttpTests(unittest.TestCase):
         ):
             with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as raw:
                 config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-                core = _start_managed_server(serve, config, ui_enabled=False)
-                proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
+                core = _start_managed_server(serve, config)
                 try:
                     status, _headers, body = _request(
                         core.port,
@@ -678,47 +533,14 @@ class BearerAuthHttpTests(unittest.TestCase):
                     self.assertEqual(status, 200)
                     headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
                     with mock.patch("gp_control_plane.core_api.read_runs", side_effect=error):
-                        for port in (core.port, proxy.port):
+                        for port in (core.port, core.port):
                             status, _headers, body = _request(port, "/api/core/runs/history", headers=headers)
                             self.assertEqual(status, 503, body)
                             self.assertEqual(json.loads(body)["error"]["code"], "storage_unavailable")
                     self.assertEqual(_request(core.port, "/api/health")[0], 200)
                 finally:
-                    proxy.close()
                     core.close()
 
-    def test_non_transient_sqlite_operational_error_is_not_a_storage_unavailable_success(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core = _start_managed_server(serve, config, ui_enabled=False)
-            proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
-            try:
-                status, _headers, body = _request(
-                    core.port,
-                    "/api/auth/login",
-                    method="POST",
-                    body=_json_bytes({"username": "admin", "password": "admin"}),
-                    headers={"Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200)
-                headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
-                error = sqlite3.OperationalError("no such table: runs")
-                with mock.patch.object(core._server, "handle_error") as core_error, mock.patch(
-                    "gp_control_plane.core_api.read_runs", side_effect=error
-                ):
-                    with self.assertRaises((http.client.RemoteDisconnected, ConnectionResetError)):
-                        _request(core.port, "/api/core/runs/history", headers=headers)
-                    proxy_status, _proxy_headers, proxy_body = _request(
-                        proxy.port, "/api/core/runs/history", headers=headers
-                    )
-
-                self.assertEqual(core_error.call_count, 2)
-                self.assertEqual(proxy_status, 502, proxy_body)
-                self.assertNotEqual(proxy_status, 503)
-                self.assertNotEqual(proxy_status, 200)
-            finally:
-                proxy.close()
-                core.close()
 
     def test_strategy_candidate_export_handles_storage_errors_before_and_after_ndjson_headers(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -824,186 +646,9 @@ class BearerAuthHttpTests(unittest.TestCase):
                 finally:
                     core.close()
 
-    def test_proxy_authorization_maps_storage_unavailable_to_503(self) -> None:
-        for error in (
-            StorageUnavailableError("storage is temporarily unavailable"),
-            sqlite3.OperationalError("database is locked"),
-        ):
-            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as raw:
-                config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-                core = _start_managed_server(serve, config, ui_enabled=False)
-                proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
-                try:
-                    with mock.patch(
-                        "gp_control_plane.web.proxy.require_bearer_token",
-                        side_effect=error,
-                    ):
-                        status, _headers, body = _request(proxy.port, "/api/core/runs/history")
-                    self.assertEqual(status, 503, body)
-                    self.assertEqual(json.loads(body)["error"]["code"], "storage_unavailable")
-                finally:
-                    proxy.close()
-                    core.close()
 
-    def test_proxy_web_json_get_maps_storage_unavailable_to_503(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core = _start_managed_server(serve, config, ui_enabled=False)
-            proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
-            try:
-                status, _headers, body = _request(
-                    proxy.port,
-                    "/api/auth/login",
-                    method="POST",
-                    body=_json_bytes({"username": "admin", "password": "admin"}),
-                    headers={"Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200)
-                headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
-                with mock.patch(
-                    "gp_control_plane.web.proxy.api_runtime.web_json_get_payload",
-                    side_effect=StorageUnavailableError("storage is temporarily unavailable"),
-                ):
-                    status, response_headers, body = _request(proxy.port, "/api/web/run-preferences", headers=headers)
 
-                self.assertEqual(status, 503, body)
-                self.assertEqual(response_headers["content-type"], "application/json; charset=utf-8")
-                self.assertEqual(json.loads(body)["error"]["code"], "storage_unavailable")
-            finally:
-                proxy.close()
-                core.close()
 
-    def test_proxy_web_json_post_maps_storage_unavailable_to_503(self) -> None:
-        for error in (
-            StorageUnavailableError("storage is temporarily unavailable"),
-            sqlite3.OperationalError("database is locked"),
-        ):
-            with self.subTest(error=type(error).__name__), tempfile.TemporaryDirectory() as raw:
-                config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-                core = _start_managed_server(serve, config, ui_enabled=False)
-                proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
-                try:
-                    status, _headers, body = _request(
-                        proxy.port,
-                        "/api/auth/login",
-                        method="POST",
-                        body=_json_bytes({"username": "admin", "password": "admin"}),
-                        headers={"Content-Type": "application/json"},
-                    )
-                    self.assertEqual(status, 200)
-                    headers = {
-                        "Authorization": f"Bearer {json.loads(body)['access_token']}",
-                        "Content-Type": "application/json",
-                    }
-                    with mock.patch(
-                        "gp_control_plane.web.proxy.api_runtime.web_json_post_response",
-                        side_effect=error,
-                    ):
-                        status, response_headers, body = _request(
-                            proxy.port,
-                            "/api/web/run-preferences",
-                            method="POST",
-                            body=_json_bytes({"run_preferences": {}}),
-                            headers=headers,
-                        )
-
-                    self.assertEqual(status, 503, body)
-                    self.assertEqual(response_headers["content-type"], "application/json; charset=utf-8")
-                    self.assertEqual(json.loads(body)["error"]["code"], "storage_unavailable")
-                finally:
-                    proxy.close()
-                    core.close()
-
-    def test_proxy_rejects_pre_rotation_bearer_during_writer_lock(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core = _start_managed_server(serve, config, ui_enabled=False)
-            proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
-            try:
-                status, _headers, body = _request(
-                    proxy.port,
-                    "/api/auth/login",
-                    method="POST",
-                    body=_json_bytes({"username": "admin", "password": "admin"}),
-                    headers={"Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200)
-                old_bearer = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
-                self.assertEqual(_request(proxy.port, "/api/core/runs/history", headers=old_bearer)[0], 200)
-
-                status, _headers, body = _request(
-                    core.port,
-                    "/api/auth/change-password",
-                    method="POST",
-                    body=_json_bytes({"current_password": "admin", "new_password": "newpass8"}),
-                    headers={**old_bearer, "Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200)
-
-                context = multiprocessing.get_context("spawn")
-                entered = context.Event()
-                release = context.Event()
-                holder_errors = context.Queue()
-                holder = context.Process(
-                    target=_hold_sqlite_immediate_transaction_in_process,
-                    args=(str(config.output.state_dir), entered, release, holder_errors),
-                    name="proxy-stale-token-write-lock-holder",
-                )
-                holder.start()
-                try:
-                    self.assertTrue(entered.wait(timeout=_PROCESS_TIMEOUT_SECONDS))
-                    status, _headers, body = _request(proxy.port, "/api/core/runs/history", headers=old_bearer)
-                    self.assertEqual(status, 401, body)
-                    self.assertEqual(json.loads(body)["error"]["code"], "authentication_required")
-                finally:
-                    release.set()
-                    _join_process(self, holder)
-                try:
-                    holder_error = holder_errors.get_nowait()
-                except queue.Empty:
-                    holder_error = None
-                self.assertIsNone(holder_error, holder_error)
-                self.assertEqual(_request(proxy.port, "/api/core/runs/history", headers=old_bearer)[0], 401)
-            finally:
-                proxy.close()
-                core.close()
-
-    def test_proxy_sse_storage_failure_after_headers_emits_one_normalized_event_error(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            core = _start_managed_server(serve, config, ui_enabled=False)
-            proxy = _start_managed_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core.port}")
-            connection = response = None
-            try:
-                status, _headers, body = _request(
-                    proxy.port,
-                    "/api/auth/login",
-                    method="POST",
-                    body=_json_bytes({"username": "admin", "password": "admin"}),
-                    headers={"Content-Type": "application/json"},
-                )
-                self.assertEqual(status, 200)
-                headers = {"Authorization": f"Bearer {json.loads(body)['access_token']}"}
-
-                with mock.patch(
-                    "gp_control_plane.web.proxy.api_runtime.web_event_changes",
-                    side_effect=[iter((("status", {"state": "ready"}),)), sqlite3.OperationalError("disk i/o error")],
-                ), mock.patch("gp_control_plane.web.proxy.time.sleep", return_value=None):
-                    connection, response = _open_sse(proxy.port, headers)
-                    stream = response.read()
-
-                self.assertEqual(response.status, 200)
-                frames = [frame for frame in stream.decode("utf-8").split("\n\n") if frame]
-                error_frames = [frame for frame in frames if frame.startswith("event: event-error\n")]
-                self.assertEqual(len(error_frames), 1, stream)
-                error_data = json.loads(error_frames[0].split("data: ", 1)[1])
-                self.assertEqual(error_data["error"], "storage_unavailable")
-                self.assertNotIn("disk i/o error", stream.decode("utf-8"))
-                self.assertNotIn("HTTP/", stream.decode("utf-8"))
-            finally:
-                _close_sse(connection, response)
-                proxy.close()
-                core.close()
 
 
 class _ManagedServer:
@@ -1066,8 +711,7 @@ def _start_managed_wsgi_server(function: Any, config: AppConfig, port: int, **kw
 def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _ManagedServer:
     port = _free_port()
     module = sys.modules[function.__module__]
-    if function.__module__ != "gp_control_plane.web.proxy":
-        return _start_managed_wsgi_server(function, config, port, **kwargs)
+    return _start_managed_wsgi_server(function, config, port, **kwargs)
     server_type = module.ThreadingHTTPServer
     server_created = threading.Event()
     server_holder: dict[str, Any] = {}

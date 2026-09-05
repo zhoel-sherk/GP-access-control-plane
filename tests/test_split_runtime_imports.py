@@ -23,7 +23,6 @@ import gp_control_plane.web.core_server
 blocked = [
     name for name in (
         "gp_control_plane.web.app",
-        "gp_control_plane.web.proxy",
         "gp_control_plane.web.ui",
     )
     if name in sys.modules

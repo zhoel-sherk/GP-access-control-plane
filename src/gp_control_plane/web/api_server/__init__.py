@@ -248,12 +248,6 @@ def serve_core(config: AppConfig, host: str = "127.0.0.1", port: int = 8081) -> 
     _serve_core(config, host=host, port=port)
 
 
-def serve_web_proxy(config: AppConfig, host: str, port: int, *, core_url: str) -> None:
-    from ..proxy import serve_web_proxy as _serve_web_proxy
-
-    _serve_web_proxy(config, host=host, port=port, core_url=core_url)
-
-
 __all__ = [
     'BACKUP_STREAM_CHUNK_BYTES',
     'BACKUP_UPLOAD_MAX_BYTES',
@@ -418,7 +412,6 @@ __all__ = [
     'save_system_preset',
     'serve',
     'serve_core',
-    'serve_web_proxy',
     'service_api',
     'set_preset_domain_enabled',
     'snapshot_file_path',
