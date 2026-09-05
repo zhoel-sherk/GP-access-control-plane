@@ -3,6 +3,7 @@ from __future__ import annotations
 import http.client
 import json
 import multiprocessing
+import os
 import queue
 import socket
 import sqlite3
@@ -815,7 +816,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                 core = _start_managed_server(serve, config, ui_enabled=False)
                 try:
                     with mock.patch(
-                        "gp_control_plane.web.api_server._http.require_bearer_token",
+                        "gp_control_plane.auth.require_bearer_token",
                         side_effect=error,
                     ):
                         status, _headers, body = _request(core.port, "/api/core/runs/history")
@@ -1020,9 +1021,55 @@ class _ManagedServer:
             raise AssertionError(f"server thread did not stop on port {self.port}")
 
 
+def _start_managed_wsgi_server(function: Any, config: AppConfig, port: int, **kwargs: Any) -> _ManagedServer:
+    """Start a Bottle app on the clean WSGI server and capture the instance."""
+    import wsgiref.simple_server
+
+    from gp_control_plane.web import server as server_module
+
+    server_created = threading.Event()
+    server_holder: dict[str, Any] = {}
+    startup_errors: list[BaseException] = []
+
+    class CapturingWSGIServer(server_module.ThreadingWSGIServer):
+        def __init__(self, server_address: tuple[str, int], handler_cls: Any = None) -> None:
+            super().__init__(server_address, handler_cls or wsgiref.simple_server.WSGIRequestHandler)
+            server_holder["server"] = self
+            server_created.set()
+
+    def run() -> None:
+        try:
+            function(config, "127.0.0.1", port, **kwargs)
+        except BaseException as error:
+            startup_errors.append(error)
+            server_created.set()
+
+    thread = threading.Thread(target=run, daemon=True)
+    with mock.patch.object(server_module, "ThreadingWSGIServer", CapturingWSGIServer):
+        thread.start()
+        if not server_created.wait(timeout=5):
+            raise AssertionError(f"wsgi server on port {port} did not construct")
+
+    if startup_errors:
+        raise AssertionError(f"wsgi server on port {port} failed during startup") from startup_errors[0]
+    server = server_holder.get("server")
+    if server is None:
+        raise AssertionError(f"wsgi server on port {port} was not captured")
+    managed = _ManagedServer(port, server, thread)
+    try:
+        _wait_for_server(port)
+    except BaseException:
+        managed.close()
+        raise
+    return managed
+
+
 def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _ManagedServer:
     port = _free_port()
     module = sys.modules[function.__module__]
+    engine = os.environ.get("GP_WEB_ENGINE", "legacy").strip().lower()
+    if engine != "legacy" and module.__name__.endswith("api_server"):
+        return _start_managed_wsgi_server(function, config, port, **kwargs)
     server_type = module.ThreadingHTTPServer
     server_created = threading.Event()
     server_holder: dict[str, Any] = {}

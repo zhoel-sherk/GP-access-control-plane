@@ -1,17 +1,22 @@
-"""bottle_server._sse — SSE streaming generator for Bottle WebUI server."""
+"""bottle_server._sse — SSE streaming generator for the Bottle WebUI server.
+
+Mirrors the legacy ``EventsMixin`` loop (same event sources, fingerprinting
+and error semantics) but emits SSE frames as a byte generator, so a storage
+failure after headers yields exactly one normalized ``event-error`` frame and
+then returns, letting the WSGI server close the connection cleanly.
+"""
 
 from __future__ import annotations
 
 import json
 import time
-import traceback
 from collections.abc import Iterator
 from typing import Any
 
 from gp_control_plane.auth import AuthenticationError, require_bearer_token
 from gp_control_plane.config import AppConfig
 from gp_control_plane.storage import is_storage_unavailable_error
-from gp_control_plane.web.api_server._events import web_event_changes
+from gp_control_plane.web.api_server import _events as _events_api
 
 
 def stream_web_events(config: AppConfig, authorization: str | None) -> Iterator[bytes]:
@@ -21,9 +26,24 @@ def stream_web_events(config: AppConfig, authorization: str | None) -> Iterator[
     while True:
         try:
             require_bearer_token(config.output.state_dir, authorization)
-            for event_name, payload in web_event_changes(config, previous):
-                require_bearer_token(config.output.state_dir, authorization)
-                yield _format_sse(event_name, payload)
+            for event_name, payload in _events_api._event_payloads(config).items():
+                try:
+                    fingerprint = _events_api._event_fingerprint(payload)
+                    if previous.get(event_name) == fingerprint:
+                        continue
+                    previous[event_name] = fingerprint
+                    require_bearer_token(config.output.state_dir, authorization)
+                    yield _format_sse(event_name, payload)
+                except (TypeError, ValueError) as exc:
+                    require_bearer_token(config.output.state_dir, authorization)
+                    yield _format_sse(
+                        "event-error",
+                        {
+                            "event": event_name,
+                            "error": "serialization",
+                            "message": str(exc),
+                        },
+                    )
             now = time.monotonic()
             if now - heartbeat_at >= 15:
                 require_bearer_token(config.output.state_dir, authorization)
@@ -37,12 +57,18 @@ def stream_web_events(config: AppConfig, authorization: str | None) -> Iterator[
             )
             return
         except Exception as exc:  # noqa: BLE001
-            print("GENERATOR EXCEPTION:", exc)
-            traceback.print_exc()
             if is_storage_unavailable_error(exc):
                 yield _format_sse(
                     "event-error",
                     {"error": "storage_unavailable", "message": "Storage is temporarily unavailable."},
+                )
+                return
+            try:
+                require_bearer_token(config.output.state_dir, authorization)
+            except AuthenticationError:
+                yield _format_sse(
+                    "event-error",
+                    {"error": "authentication_required", "message": "Bearer token is required"},
                 )
                 return
             yield _format_sse("event-error", {"error": "event-loop", "message": str(exc)})

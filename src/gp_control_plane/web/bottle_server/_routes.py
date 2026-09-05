@@ -13,8 +13,9 @@ from collections.abc import Callable
 from http import HTTPStatus
 from typing import Any
 
+from gp_control_plane import auth as _auth_api
 from gp_control_plane import core_api
-from gp_control_plane.auth import AuthenticationError, require_bearer_token
+from gp_control_plane.auth import AuthenticationError
 from gp_control_plane.backups import import_snapshot_archive, snapshot_file_path
 from gp_control_plane.config import AppConfig
 from gp_control_plane.resource_budget import (
@@ -65,7 +66,7 @@ def create_bottle_app(
         route = route_for(request.method, path)
         if route and not route.auth_required:
             return
-        require_bearer_token(config.output.state_dir, request.get_header("Authorization"))
+        _auth_api.require_bearer_token(config.output.state_dir, request.get_header("Authorization"))
 
     def _json(payload: dict[str, Any], status: int = 200) -> HTTPResponse:
         norm = normalize_error_payload(payload, HTTPStatus(status))
@@ -189,18 +190,18 @@ def create_bottle_app(
             headers={"Content-Type": SWAGGER_HTML_CONTENT_TYPE, "Cache-Control": "no-store"},
         )
 
-    def export_strategy_candidates() -> HTTPResponse:
+    def export_strategy_candidates() -> Any:
         query = _get_query_dict()
         if request.method == "HEAD":
             return HTTPResponse(status=200, headers={"Content-Type": NDJSON_CONTENT_TYPE, "Content-Length": "0"})
+        iterator = core_api.iter_strategy_candidates_export_lines(config, query)
         try:
-            lines = list(core_api.iter_strategy_candidates_export_lines(config, query))
-            return HTTPResponse(
-                body=b"".join(lines),
-                status=200,
-                headers={"Content-Type": NDJSON_CONTENT_TYPE},
-            )
+            first_line = next(iterator)
+        except StopIteration:
+            first_line = None
         except Exception as exc:  # noqa: BLE001
+            if isinstance(exc, ValueError):
+                return _json({"error": str(exc)}, 400)
             if is_storage_unavailable_error(exc):
                 return HTTPResponse(
                     body=json.dumps(_STORAGE_ERROR_JSON, ensure_ascii=False, separators=(",", ":")),
@@ -208,6 +209,22 @@ def create_bottle_app(
                     headers={"Content-Type": "application/json; charset=utf-8"},
                 )
             return _json(error_payload("internal_error", str(exc)), 500)
+
+        def body() -> Any:
+            if first_line is not None:
+                yield first_line
+            while True:
+                try:
+                    line = next(iterator)
+                except StopIteration:
+                    return
+                except Exception:  # noqa: BLE001 - mid-stream failure truncates the stream
+                    return
+                yield line
+
+        response.content_type = NDJSON_CONTENT_TYPE
+        response.set_header("Cache-Control", "no-store")
+        return body()
 
     def download_backup_archive() -> HTTPResponse:
         query_dict = _get_query_dict()
@@ -271,7 +288,7 @@ def create_bottle_app(
             if is_storage_unavailable_error(exc):
                 raise HTTPResponse(
                     body=json.dumps(_STORAGE_ERROR_JSON, ensure_ascii=False, separators=(",", ":")),
-                    status=530,
+                    status=503,
                     headers={"Content-Type": "application/json; charset=utf-8"},
                 ) from None
             raise

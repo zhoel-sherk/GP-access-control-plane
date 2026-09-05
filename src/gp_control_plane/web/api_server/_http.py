@@ -8,8 +8,9 @@ from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
+from gp_control_plane import auth as _auth_api
 from gp_control_plane import core_api
-from gp_control_plane.auth import AuthenticationError, require_bearer_token
+from gp_control_plane.auth import AuthenticationError
 from gp_control_plane.backups import snapshot_file_path
 from gp_control_plane.resource_budget import (
     BACKUP_STREAM_CHUNK_BYTES,
@@ -80,7 +81,7 @@ class HttpMixin:
         self._head(HTTPStatus.OK, OPENAPI_JSON_CONTENT_TYPE, len(data))
 
     def _require_stream_authorization(self, authorization: str | None) -> None:
-        require_bearer_token(self.config.output.state_dir, authorization)
+        _auth_api.require_bearer_token(self.config.output.state_dir, authorization)
 
     def _json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         response = normalize_error_payload(payload, status)
@@ -98,7 +99,7 @@ class HttpMixin:
         if route and not route.auth_required:
             return True
         try:
-            require_bearer_token(self.config.output.state_dir, self.headers.get("Authorization"))
+            _auth_api.require_bearer_token(self.config.output.state_dir, self.headers.get("Authorization"))
         except Exception as exc:
             if _is_storage_unavailable_error(exc):
                 self._storage_unavailable()
