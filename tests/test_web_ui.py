@@ -2004,23 +2004,18 @@ class WebUiTests(unittest.TestCase):
 
         self.assertIs(app_module, api_module)
 
-    def test_serve_runtime_selects_requested_web_engine(self) -> None:
-        for engine, expected_styles in (("legacy", 1), ("bottle", 2)):
-            with self.subTest(engine=engine):
-                with mock.patch.dict(os.environ, {"GP_WEB_ENGINE": engine}):
-                    with _captured_server_temporary_directory() as (raw, start_server):
-                        tmp = Path(raw)
-                        config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-                        port = start_server(serve, config).port
-                        status, _headers, body = _http_request(port, "/")
-                        self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
-                        html = body.decode("utf-8", errors="replace")
-                        self.assertEqual(html.count("<style>"), expected_styles, engine)
+    def test_serve_runtime_hosts_bottle_web_ui(self) -> None:
+        with _captured_server_temporary_directory() as (raw, start_server):
+            tmp = Path(raw)
+            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
+            port = start_server(serve, config).port
+            status, _headers, body = _http_request(port, "/")
+            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
+            html = body.decode("utf-8", errors="replace")
+            self.assertEqual(html.count("<style>"), 2)
 
     def test_openapi_paths_are_callable_through_web_runtime(self) -> None:
-        for engine in ("legacy", "bottle"):
-            with self.subTest(engine=engine), mock.patch.dict(os.environ, {"GP_WEB_ENGINE": engine}):
-                self._run_web_runtime_openapi_contract()
+        self._run_web_runtime_openapi_contract()
 
     def _run_web_runtime_openapi_contract(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -5086,8 +5081,7 @@ def _start_captured_server(
     _server_type: type[Any] | None = None,
     **kwargs: Any,
 ) -> Any:
-    engine = os.environ.get("GP_WEB_ENGINE", "legacy").strip().lower()
-    if engine != "legacy":
+    if function.__module__ != "gp_control_plane.web.proxy":
         return _start_captured_wsgi_server(function, config, **kwargs)
     module = sys.modules[function.__module__]
     server_type = _server_type or module.ThreadingHTTPServer

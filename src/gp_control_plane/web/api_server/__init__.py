@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
 import threading
 import time
 from http import HTTPStatus
@@ -238,32 +237,9 @@ _core_strategy_discovery_job_payload = core_api.strategy_discovery_job_payload
 
 
 def serve(config: AppConfig, host: str, port: int, *, ui_enabled: bool = True) -> None:
-    engine = os.environ.get("GP_WEB_ENGINE", "legacy").strip().lower()
-    if engine != "legacy":
-        from gp_control_plane.web.bottle_server import serve_web_bottle
+    from gp_control_plane.web.bottle_server import serve_web_bottle
 
-        serve_web_bottle(config, host, port, ui_enabled=ui_enabled)
-        return
-
-    _recover_runtime_before_serve(config)
-    close_stale_running_runs(config.output.state_dir)
-    runner = JobRunner(config.output.state_dir, on_idle=lambda: create_post_run_snapshot(config.output.state_dir))
-    runtime_role = "monolith" if ui_enabled else "core"
-    web_install_enabled = True if ui_enabled else None
-
-    class Handler(ApiHandler):
-        pass
-
-    Handler.config = config
-    Handler.runner = runner
-    Handler.ui_enabled = ui_enabled
-    Handler.runtime_role = runtime_role
-    Handler.web_install_enabled = web_install_enabled
-
-    server = ThreadingHTTPServer((host, port), Handler)
-    mode = "web UI" if ui_enabled else "core API"
-    print(f"GP control plane {mode} listening on http://{host}:{port}")
-    server.serve_forever()
+    serve_web_bottle(config, host, port, ui_enabled=ui_enabled)
 
 
 def serve_core(config: AppConfig, host: str = "127.0.0.1", port: int = 8081) -> None:

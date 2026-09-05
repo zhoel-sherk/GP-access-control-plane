@@ -3,7 +3,6 @@ from __future__ import annotations
 import http.client
 import json
 import multiprocessing
-import os
 import queue
 import socket
 import sqlite3
@@ -1067,8 +1066,7 @@ def _start_managed_wsgi_server(function: Any, config: AppConfig, port: int, **kw
 def _start_managed_server(function: Any, config: AppConfig, **kwargs: Any) -> _ManagedServer:
     port = _free_port()
     module = sys.modules[function.__module__]
-    engine = os.environ.get("GP_WEB_ENGINE", "legacy").strip().lower()
-    if engine != "legacy" and module.__name__.endswith("api_server"):
+    if function.__module__ != "gp_control_plane.web.proxy":
         return _start_managed_wsgi_server(function, config, port, **kwargs)
     server_type = module.ThreadingHTTPServer
     server_created = threading.Event()
