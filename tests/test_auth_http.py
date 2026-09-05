@@ -521,7 +521,7 @@ class BearerAuthHttpTests(unittest.TestCase):
                 "gp_control_plane.web.api_server._jobs._job_zapret_multi_domain_discovery",
                 side_effect=controlled_discovery,
             ), mock.patch(
-                "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                 side_effect=cancel_hook_called.set,
             ):
                 core = _start_managed_server(serve, config, ui_enabled=False)

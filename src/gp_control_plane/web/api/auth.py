@@ -13,13 +13,13 @@ def api_health(ctx: HandlerContext) -> dict[str, Any]:
     return health_payload()
 
 
-@register_post("/api/auth/login")
+@register_post("/api/auth/login", error_status=401, value_error_status=400)
 def api_login(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
     payload = ctx.body or {}
     return login(ctx.config.output.state_dir, payload), 200
 
 
-@register_post("/api/auth/change-password")
+@register_post("/api/auth/change-password", error_status=401, value_error_status=400)
 def api_change_password(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
     payload = ctx.body or {}
     return change_password(ctx.config.output.state_dir, payload, ctx.authorization), 200

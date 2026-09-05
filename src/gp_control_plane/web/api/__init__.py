@@ -114,6 +114,8 @@ def json_get(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
             return error_payload("invalid_request", str(exc)), HTTPStatus.BAD_REQUEST
         if path in {"/api/core/presets/v2fly/category-domains", "/api/core/strategy-candidates"}:
             return {"error": str(exc)}, HTTPStatus.BAD_REQUEST
+        if path.startswith("/api/web/"):
+            return {"error": str(exc)}, HTTPStatus.BAD_REQUEST
         raise
 
 

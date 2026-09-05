@@ -2075,7 +2075,7 @@ class WebUiTests(unittest.TestCase):
                     },
                 ),
                 mock.patch(
-                    "gp_control_plane.web.api_server._post.export_nfconf",
+                    "gp_control_plane.web.api.core.export_nfconf",
                     return_value={
                         "engine": "blockchecks",
                         "out_dir": "/tmp/nfconf-out",
@@ -2084,20 +2084,7 @@ class WebUiTests(unittest.TestCase):
                     },
                 ),
                 mock.patch(
-                    "gp_control_plane.web.api_server._get.bs_triage_domain",
-                    side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
-                ),
-                mock.patch(
-                    "gp_control_plane.web.bottle_server._routes_core.export_nfconf",
-                    return_value={
-                        "engine": "blockchecks",
-                        "out_dir": "/tmp/nfconf-out",
-                        "paths": ["/tmp/nfconf-out/nfqws2.conf"],
-                        "db": "/tmp/state.db",
-                    },
-                ),
-                mock.patch(
-                    "gp_control_plane.web.bottle_server._routes_core.bs_triage_domain",
+                    "gp_control_plane.web.api.core.bs_triage_domain",
                     side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
                 ),
             ):
@@ -2319,7 +2306,7 @@ class WebUiTests(unittest.TestCase):
                 mock.patch("gp_control_plane.web.api_server._jobs.run_multi_domain_discovery", return_value={"status": "success"}),
                 mock.patch("gp_control_plane.web.api_server._jobs.run_standard_discovery", return_value={"status": "success"}),
                 mock.patch(
-                    "gp_control_plane.web.api_server._post.export_nfconf",
+                    "gp_control_plane.web.api.core.export_nfconf",
                     return_value={
                         "engine": "blockchecks",
                         "out_dir": "/tmp/nfconf-out",
@@ -2328,7 +2315,7 @@ class WebUiTests(unittest.TestCase):
                     },
                 ),
                 mock.patch(
-                    "gp_control_plane.web.api_server._get.bs_triage_domain",
+                    "gp_control_plane.web.api.core.bs_triage_domain",
                     side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
                 ),
                 mock.patch.object(web_app.service_api, "release_channel_info", return_value=release),
@@ -3903,7 +3890,7 @@ class WebUiTests(unittest.TestCase):
                     mock.patch.object(web_app, "create_post_run_snapshot", side_effect=create_snapshot_when_idle),
                     mock.patch.object(strategy_finder_process, "signal_registered_process_run") as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_started.set,
                     ) as cleanup,
                 ):
@@ -4011,7 +3998,7 @@ class WebUiTests(unittest.TestCase):
                         side_effect=AssertionError("root signal must not run after immediate stop"),
                     ) as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_completed.set,
                     ) as cleanup,
                 ):
@@ -4124,7 +4111,7 @@ class WebUiTests(unittest.TestCase):
                         side_effect=AssertionError("root signal must not run after stop during root_command"),
                     ) as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_completed.set,
                     ) as cleanup,
                 ):
@@ -4235,7 +4222,7 @@ class WebUiTests(unittest.TestCase):
                         side_effect=AssertionError("root signal must not run before a child is launched"),
                     ) as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_completed.set,
                     ) as cleanup,
                 ):

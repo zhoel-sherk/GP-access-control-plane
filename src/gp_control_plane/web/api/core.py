@@ -19,7 +19,7 @@ from gp_control_plane.discovery_engine import (
     normalize_engine,
 )
 from gp_control_plane.settings import read_run_settings, save_run_settings
-from gp_control_plane.state import active_job_lock_payload, read_state
+from gp_control_plane.state import read_state
 from gp_control_plane.web.api import HandlerContext, register_get, register_post
 from gp_control_plane.web.api_server._errors import RuntimeBusyError
 from gp_control_plane.web.api_server._events import (
@@ -134,11 +134,6 @@ def core_strategy_pairs(ctx: HandlerContext) -> dict[str, Any]:
 @register_get("/api/core/events")
 def core_events(ctx: HandlerContext) -> dict[str, Any]:
     return _events_response_payload(ctx.config, _ctx_query(ctx), stream="core")
-
-
-def _is_idle(ctx: HandlerContext) -> None:
-    if active_job_lock_payload(ctx.config.output.state_dir, cleanup_stale=True):
-        raise RuntimeBusyError()
 
 
 @register_post("/api/core/strategy-discovery/stop-current-run", error_status=409, value_error_status=409)

@@ -112,6 +112,22 @@ class HttpMixin:
     def _storage_unavailable(self) -> None:
         self._json(error_payload("storage_unavailable", "Storage is temporarily unavailable."), HTTPStatus.SERVICE_UNAVAILABLE)
 
+    def _api_http_error(self, error: Any) -> None:
+        """Write a unified ``web.api`` ApiHttpError as a JSON HTTP response."""
+        data = json.dumps(
+            normalize_error_payload(error.payload, HTTPStatus(error.status)),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.send_response(error.status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        for key, value in (error.headers or {}).items():
+            self.send_header(key, value)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+        self.wfile.flush()
+
     def _auth_error(self, error: AuthenticationError) -> None:
         del error
         data = json.dumps(
