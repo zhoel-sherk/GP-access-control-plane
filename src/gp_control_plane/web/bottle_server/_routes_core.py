@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from http import HTTPStatus
 from typing import Any
 
 from gp_control_plane import __version__, core_api, service_api
@@ -33,7 +32,8 @@ from gp_control_plane.resource_budget import (
 )
 from gp_control_plane.settings import read_run_settings, read_service_settings, save_run_settings
 from gp_control_plane.state import has_active_runtime
-from gp_control_plane.web.api_server import _http as _api_http, _post as _api_post
+from gp_control_plane.web.api_server import _http as _api_http
+from gp_control_plane.web.api_server import _post as _api_post
 from gp_control_plane.web.api_server._errors import RequestBodyTooLarge
 from gp_control_plane.web.api_server._events import (
     _current_run_latest_log_payload,
@@ -41,13 +41,13 @@ from gp_control_plane.web.api_server._events import (
     _latest_log_payload,
 )
 from gp_control_plane.web.api_server._helpers import _query_one
+from gp_control_plane.web.api_server._http import NDJSON_CONTENT_TYPE
 from gp_control_plane.web.api_server._jobs import (
     _clean_install_vault_create_response,
     _clean_install_vault_public_metadata,
     _clean_install_vault_restore_response,
     _job_discovery,
 )
-from gp_control_plane.web.api_server._http import NDJSON_CONTENT_TYPE
 from gp_control_plane.web.errors import error_payload
 from gp_control_plane.web.vendor.bottle import Bottle, HTTPResponse, request
 

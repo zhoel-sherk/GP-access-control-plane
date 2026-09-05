@@ -51,4 +51,4 @@ def stream_web_events(config: AppConfig, authorization: str | None) -> Iterator[
 
 def _format_sse(event_name: str, payload: dict[str, Any]) -> bytes:
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    return f"event: {event_name}\ndata: {data}\n\n".encode("utf-8")
+    return f"event: {event_name}\ndata: {data}\n\n".encode()

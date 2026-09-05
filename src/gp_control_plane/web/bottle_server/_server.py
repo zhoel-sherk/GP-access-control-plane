@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 from wsgiref.simple_server import WSGIRequestHandler, WSGIServer
 
-from gp_control_plane.backups import create_post_run_snapshot
 from gp_control_plane.config import AppConfig
 from gp_control_plane.engine_common import close_stale_running_runs
 from gp_control_plane.web import api_server

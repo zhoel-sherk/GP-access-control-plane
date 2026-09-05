@@ -2004,7 +2004,25 @@ class WebUiTests(unittest.TestCase):
 
         self.assertIs(app_module, api_module)
 
+    def test_serve_runtime_selects_requested_web_engine(self) -> None:
+        for engine, expected_styles in (("legacy", 1), ("bottle", 2)):
+            with self.subTest(engine=engine):
+                with mock.patch.dict(os.environ, {"GP_WEB_ENGINE": engine}):
+                    with _captured_server_temporary_directory() as (raw, start_server):
+                        tmp = Path(raw)
+                        config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
+                        port = start_server(serve, config).port
+                        status, _headers, body = _http_request(port, "/")
+                        self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
+                        html = body.decode("utf-8", errors="replace")
+                        self.assertEqual(html.count("<style>"), expected_styles, engine)
+
     def test_openapi_paths_are_callable_through_web_runtime(self) -> None:
+        for engine in ("legacy", "bottle"):
+            with self.subTest(engine=engine), mock.patch.dict(os.environ, {"GP_WEB_ENGINE": engine}):
+                self._run_web_runtime_openapi_contract()
+
+    def _run_web_runtime_openapi_contract(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
@@ -2064,6 +2082,23 @@ class WebUiTests(unittest.TestCase):
                         "paths": ["/tmp/nfconf-out/nfqws2.conf"],
                         "db": "/tmp/state.db",
                     },
+                ),
+                mock.patch(
+                    "gp_control_plane.web.api_server._get.bs_triage_domain",
+                    side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
+                ),
+                mock.patch(
+                    "gp_control_plane.web.bottle_server._routes_core.export_nfconf",
+                    return_value={
+                        "engine": "blockchecks",
+                        "out_dir": "/tmp/nfconf-out",
+                        "paths": ["/tmp/nfconf-out/nfqws2.conf"],
+                        "db": "/tmp/state.db",
+                    },
+                ),
+                mock.patch(
+                    "gp_control_plane.web.bottle_server._routes_core.bs_triage_domain",
+                    side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
                 ),
             ):
                 port = start_server(serve, config).port
@@ -2291,6 +2326,10 @@ class WebUiTests(unittest.TestCase):
                         "paths": ["/tmp/nfconf-out/nfqws2.conf"],
                         "db": "/tmp/state.db",
                     },
+                ),
+                mock.patch(
+                    "gp_control_plane.web.api_server._get.bs_triage_domain",
+                    side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
                 ),
                 mock.patch.object(web_app.service_api, "release_channel_info", return_value=release),
                 mock.patch.object(web_app.service_api, "fetch_v2fly_revision", return_value="remote-test-revision"),
