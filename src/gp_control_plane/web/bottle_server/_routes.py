@@ -18,10 +18,6 @@ from gp_control_plane import core_api
 from gp_control_plane.auth import AuthenticationError
 from gp_control_plane.backups import import_snapshot_archive, snapshot_file_path
 from gp_control_plane.config import AppConfig
-from gp_control_plane.resource_budget import (
-    BACKUP_UPLOAD_MAX_BYTES,
-    JSON_REQUEST_MAX_BYTES,
-)
 from gp_control_plane.state import has_active_runtime
 from gp_control_plane.storage import is_storage_unavailable_error
 from gp_control_plane.web.api import (
@@ -31,10 +27,8 @@ from gp_control_plane.web.api import (
     json_get,
     json_post,
 )
-from gp_control_plane.web.api_server import _http as _api_http
 from gp_control_plane.web.api_server._errors import RequestBodyTooLarge
 from gp_control_plane.web.api_server._helpers import _query_one
-from gp_control_plane.web.api_server._http import NDJSON_CONTENT_TYPE
 from gp_control_plane.web.bottle_server._sse import stream_web_events
 from gp_control_plane.web.docs import (
     OPENAPI_JSON_CONTENT_TYPE,
@@ -43,6 +37,11 @@ from gp_control_plane.web.docs import (
     swagger_ui_html,
 )
 from gp_control_plane.web.errors import error_payload, normalize_error_payload
+from gp_control_plane.web.limits import (
+    MAX_BACKUP_UPLOAD_BYTES,
+    MAX_JSON_REQUEST_BYTES,
+    NDJSON_CONTENT_TYPE,
+)
 from gp_control_plane.web.routes import ROUTES, route_for
 from gp_control_plane.web.ui_bottle import bottle_index_html
 from gp_control_plane.web.vendor.bottle import Bottle, HTTPResponse, request, response
@@ -85,7 +84,7 @@ def create_bottle_app(
             length = int(request.get_header("Content-Length") or "0")
         except ValueError:
             length = 0
-        max_json = getattr(_api_http, "MAX_JSON_REQUEST_BYTES", JSON_REQUEST_MAX_BYTES)
+        max_json = MAX_JSON_REQUEST_BYTES
         if length > max_json:
             raise RequestBodyTooLarge("request body is too large")
         try:
@@ -251,7 +250,7 @@ def create_bottle_app(
             if has_active_runtime(config.output.state_dir):
                 return _json(error_payload("runtime_busy", "Backup mutations are blocked while another job is running."), 409)
             content_length = int(request.get_header("Content-Length") or "0")
-            max_upload = getattr(_api_http, "MAX_BACKUP_UPLOAD_BYTES", BACKUP_UPLOAD_MAX_BYTES)
+            max_upload = MAX_BACKUP_UPLOAD_BYTES
             if content_length > max_upload:
                 return _json(error_payload("request_too_large", "request body is too large"), 413)
             body = request.body.read(max_upload + 1)
