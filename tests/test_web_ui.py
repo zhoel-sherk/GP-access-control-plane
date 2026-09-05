@@ -1640,8 +1640,7 @@ class WebUiTests(unittest.TestCase):
                 },
             )
             authorization = _bearer_authorization_for_state(config.output.state_dir)
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
+            port = start_server(serve, config).port
 
             contract = json.loads(web_app.openapi_json_bytes().decode("utf-8"))
             item_schema = contract["components"]["schemas"]["RunHistoryItem"]
@@ -1649,7 +1648,7 @@ class WebUiTests(unittest.TestCase):
             self.assertNotIn("id", item_schema["properties"])
 
             for path in ("/api/core/runs/history", "/api/web/runs/history-page"):
-                status, _headers, body = _http_request(web_port, path, headers={"Authorization": authorization})
+                status, _headers, body = _http_request(port, path, headers={"Authorization": authorization})
                 self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
                 item = json.loads(body.decode("utf-8"))["runs"][0]
                 self.assertEqual(item["run_id"], "run-contract")
@@ -1957,9 +1956,8 @@ class WebUiTests(unittest.TestCase):
             with mock.patch("gp_control_plane.web.api_server._http.MAX_JSON_REQUEST_BYTES", 10):
                 monolith_port = start_server(serve, config).port
                 core_port = start_server(serve_core, config).port
-                proxy_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
 
-                for port in (monolith_port, core_port, proxy_port):
+                for port in (monolith_port, core_port):
                     for method, path, payload, headers in representative_legacy_requests:
                         if isinstance(payload, bytes):
                             raw_body = payload
@@ -1989,14 +1987,14 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn("from .app import", source)
         self.assertNotIn("gp_control_plane.web.app", source)
 
-    def test_core_server_uses_api_server_entrypoint(self) -> None:
-        from gp_control_plane.web import api_server, core_server
+    def test_core_server_uses_bottle_factory_entrypoint(self) -> None:
+        from gp_control_plane.web import core_server
 
         config = AppConfig(output=OutputConfig(state_dir=Path("unused-state")))
-        with mock.patch.object(api_server, "serve") as serve_mock:
+        with mock.patch("gp_control_plane.web.bottle_server.serve_web_bottle") as serve_bottle_mock:
             core_server.serve_core(config, host="127.0.0.1", port=18081)
 
-        serve_mock.assert_called_once_with(config, host="127.0.0.1", port=18081, ui_enabled=False)
+        serve_bottle_mock.assert_called_once_with(config, host="127.0.0.1", port=18081, ui_enabled=False)
 
     def test_web_app_is_api_server_compatibility_alias(self) -> None:
         app_module = importlib.import_module("gp_control_plane.web.app")
@@ -5009,6 +5007,9 @@ class _WsgiCapturedServer:
             finally:
                 if self._thread.is_alive():
                     self._thread.join(timeout=5)
+
+    def close_active_request_connections(self) -> None:
+        self._server.close_active_request_connections()
 
 
 def _start_captured_wsgi_server(function: Any, config: AppConfig, **kwargs: Any) -> _WsgiCapturedServer:
