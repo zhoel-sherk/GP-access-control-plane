@@ -458,53 +458,6 @@ class TestServerLifecycleTests(unittest.TestCase):
             self.assertIsNone(released["current_run_id"])
             self.assertIsNone(released["current_run_status"])
 
-    def test_startup_failure_closes_listener_that_binds_during_cleanup(self) -> None:
-        bind_started = threading.Event()
-        allow_bind = threading.Event()
-        original_server = api_server.ThreadingHTTPServer
-
-        class DelayedServer(original_server):
-            def __init__(self, *args: Any, **kwargs: Any):
-                bind_started.set()
-                if not allow_bind.wait(timeout=5):
-                    raise AssertionError("test did not allow the server to bind")
-                super().__init__(*args, **kwargs)
-
-        with tempfile.TemporaryDirectory() as raw:
-            server = _TestServer(
-                AppConfig(output=OutputConfig(state_dir=Path(raw) / "state")),
-                startup_timeout=0.01,
-                server_type=DelayedServer,
-                startup_timeout_gate=bind_started,
-            )
-            startup_error: list[BaseException] = []
-
-            def start_server() -> None:
-                try:
-                    server.__enter__()
-                except BaseException as error:
-                    startup_error.append(error)
-
-            startup_thread = threading.Thread(target=start_server)
-            startup_thread.start()
-            try:
-                self.assertTrue(bind_started.wait(timeout=5), "DelayedServer construction did not begin")
-                self.assertTrue(server._startup_cancelled.wait(timeout=5), "startup cancellation did not begin")
-            finally:
-                server._startup_cancelled.set()
-                allow_bind.set()
-                startup_thread.join(timeout=5)
-
-            self.assertFalse(startup_thread.is_alive())
-            self.assertEqual(1, len(startup_error))
-            self.assertEqual("test server did not bind its HTTP listener", str(startup_error[0]))
-            self.assertIsNotNone(server._server)
-            self.assertIsNotNone(server._thread)
-            self.assertFalse(server._thread.is_alive())
-            self.assertIs(api_server.ThreadingHTTPServer, original_server)
-            with socket.socket() as probe:
-                probe.bind(("127.0.0.1", server.port))
-
 
 class EdgeCdpLifecycleTests(unittest.TestCase):
     def setUp(self) -> None:

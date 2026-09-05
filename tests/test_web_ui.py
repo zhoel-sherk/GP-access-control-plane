@@ -2471,7 +2471,7 @@ class WebUiTests(unittest.TestCase):
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
             with (
                 mock.patch("gp_control_plane.web.limits.MAX_BACKUP_UPLOAD_BYTES", 10),
-                mock.patch("gp_control_plane.web.api_server._post.import_snapshot_archive") as import_mock,
+                mock.patch("gp_control_plane.backups.import_snapshot_archive") as import_mock,
             ):
                 port = start_server(serve, config).port
 

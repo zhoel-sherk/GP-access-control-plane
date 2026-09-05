@@ -5,13 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-import time
-from http import HTTPStatus
 from pathlib import Path
 from typing import Any
 
 from gp_control_plane import __version__, core_api
-from gp_control_plane.auth import AuthenticationError
 from gp_control_plane.config import AppConfig
 from gp_control_plane.engine_common import (
     candidate_storage_version,
@@ -20,9 +17,6 @@ from gp_control_plane.engine_common import (
 )
 from gp_control_plane.settings import read_run_settings, read_settings
 from gp_control_plane.state import now_iso, read_state
-from gp_control_plane.storage import (
-    is_storage_unavailable_error as _is_storage_unavailable_error,
-)
 from gp_control_plane.storage import (
     read_custom_preset_index,
     read_system_preset_index,
@@ -39,77 +33,6 @@ from gp_control_plane.zapret2 import check_install_cached
 _EVENT_CURSOR_LOCK = threading.Lock()
 _EVENT_CURSOR_STATE: dict[str, dict[str, Any]] = {}
 
-
-class EventsMixin:
-    def _events(self) -> None:
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "keep-alive")
-        self.end_headers()
-        authorization = self.headers.get("Authorization")
-        previous: dict[str, str] = {}
-        heartbeat_at = 0.0
-        while True:
-            try:
-                self._require_stream_authorization(authorization)
-                for event_name, payload in _event_payloads(self.config).items():
-                    try:
-                        fingerprint = _event_fingerprint(payload)
-                        if previous.get(event_name) == fingerprint:
-                            continue
-                        previous[event_name] = fingerprint
-                        self._require_stream_authorization(authorization)
-                        self._event(event_name, payload)
-                    except (TypeError, ValueError) as exc:
-                        self._require_stream_authorization(authorization)
-                        self._event(
-                            "event-error",
-                            {
-                                "event": event_name,
-                                "error": "serialization",
-                                "message": str(exc),
-                            },
-                        )
-                now = time.monotonic()
-                if now - heartbeat_at >= 15:
-                    self._require_stream_authorization(authorization)
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.flush()
-                    heartbeat_at = now
-                time.sleep(1)
-            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                return
-            except AuthenticationError:
-                self.close_connection = True
-                return
-            except Exception as exc:  # noqa: BLE001
-                if _is_storage_unavailable_error(exc):
-                    self._event(
-                        "event-error",
-                        {
-                            "error": "storage_unavailable",
-                            "message": "Storage is temporarily unavailable.",
-                        },
-                    )
-                    self.close_connection = True
-                    return
-                try:
-                    self._require_stream_authorization(authorization)
-                    self._event("event-error", {"error": "event-loop", "message": str(exc)})
-                except (AuthenticationError, BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
-                    self.close_connection = True
-                    return
-                except Exception:  # noqa: BLE001
-                    self.close_connection = True
-                    return
-                time.sleep(1)
-
-    def _event(self, event_name: str, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        self.wfile.write(f"event: {event_name}\n".encode())
-        self.wfile.write(f"data: {data}\n\n".encode())
-        self.wfile.flush()
 
 
 def web_event_changes(config: AppConfig, previous_fingerprints: dict[str, str]) -> list[tuple[str, dict[str, Any]]]:
