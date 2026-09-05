@@ -4984,6 +4984,99 @@ def _is_expected_socket_teardown_error(error: OSError) -> bool:
     }
 
 
+class _WsgiCapturedServer:
+    """Handle around a clean WSGI server (Bottle engine) captured by tests."""
+
+    def __init__(self, server: Any, thread: threading.Thread) -> None:
+        self._server = server
+        self._thread = thread
+
+    @property
+    def port(self) -> int:
+        return int(self._server.server_address[1])
+
+    @property
+    def active_request_handler_count(self) -> int:
+        return self._server.active_request_handler_count
+
+    def __enter__(self) -> _WsgiCapturedServer:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        try:
+            self._server.shutdown()
+        finally:
+            try:
+                self._server.server_close()
+            finally:
+                if self._thread.is_alive():
+                    self._thread.join(timeout=5)
+
+
+def _start_captured_wsgi_server(function: Any, config: AppConfig, **kwargs: Any) -> _WsgiCapturedServer:
+    """Capture a Bottle app hosted on the clean stdlib WSGI server.
+
+    Starts ``function(config, host, port, **kwargs)`` in a thread and swaps
+    ``web.server.ThreadingWSGIServer`` for a capturing subclass (no legacy
+    class patching involved).
+    """
+    import wsgiref.simple_server
+
+    from gp_control_plane.web import server as server_module
+
+    state: dict[str, Any] = {}
+    condition = threading.Condition()
+
+    class CapturingWSGIServer(server_module.ThreadingWSGIServer):
+        def __init__(self, server_address: tuple[str, int], handler_cls: Any = None) -> None:
+            server_address = (server_address[0], 0)
+            super().__init__(server_address, handler_cls or wsgiref.simple_server.WSGIRequestHandler)
+            with condition:
+                state["listener"] = self
+                condition.notify_all()
+
+        def serve_forever(self, *args: Any, **kws: Any) -> None:
+            with condition:
+                state["serving"] = self
+                condition.notify_all()
+            super().serve_forever(*args, **kws)
+
+    def run() -> None:
+        try:
+            with mock.patch.object(server_module, "ThreadingWSGIServer", CapturingWSGIServer):
+                function(config, "127.0.0.1", 0, **kwargs)
+        except BaseException as exc:  # noqa: BLE001
+            with condition:
+                state["error"] = exc
+                condition.notify_all()
+        finally:
+            with condition:
+                state["finished"] = True
+                condition.notify_all()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    with condition:
+        while (
+            time.monotonic() < deadline
+            and state.get("serving") is None
+            and state.get("error") is None
+            and not state.get("finished")
+        ):
+            condition.wait(timeout=0.2)
+        error = state.get("error")
+        server = state.get("serving")
+    if error is not None:
+        raise AssertionError("wsgi captured server failed during startup") from error
+    if server is None:
+        raise AssertionError("wsgi captured server did not start serving")
+    return _WsgiCapturedServer(server, thread)
+
+
 def _start_captured_server(
     function: Any,
     config: AppConfig,
@@ -4992,7 +5085,10 @@ def _start_captured_server(
     _after_constructor_abandon_check: Any | None = None,
     _server_type: type[Any] | None = None,
     **kwargs: Any,
-) -> _CapturedTestServer:
+) -> Any:
+    engine = os.environ.get("GP_WEB_ENGINE", "legacy").strip().lower()
+    if engine != "legacy":
+        return _start_captured_wsgi_server(function, config, **kwargs)
     module = sys.modules[function.__module__]
     server_type = _server_type or module.ThreadingHTTPServer
     server_modules = (
