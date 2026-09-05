@@ -27,13 +27,18 @@ from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.state import read_state, update_state
 from gp_control_plane.web import api_server
 from gp_control_plane.web.api_server import serve
-from gp_control_plane.web.ui import index_html
+from gp_control_plane.web.ui import index_html, static_root
 
 
 class UiBearerAuthSourceContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.html = index_html()
+        shell = index_html()
+        js = "\n".join(
+            (static_root() / "js" / name).read_text(encoding="utf-8")
+            for name in sorted(p.name for p in (static_root() / "js").glob("*.js"))
+        )
+        cls.html = shell + "<script>\n" + js + "\n</script>"
 
     @staticmethod
     def script_block(start_marker: str, end_marker: str) -> str:

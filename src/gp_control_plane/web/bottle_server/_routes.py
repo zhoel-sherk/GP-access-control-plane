@@ -40,8 +40,9 @@ from gp_control_plane.web.docs import (
 from gp_control_plane.web.errors import error_payload, normalize_error_payload
 from gp_control_plane.web.limits import NDJSON_CONTENT_TYPE
 from gp_control_plane.web.routes import ROUTES, route_for
-from gp_control_plane.web.ui_bottle import bottle_index_html
-from gp_control_plane.web.vendor.bottle import Bottle, HTTPResponse, request, response
+from gp_control_plane.web.ui import index_html as ui_index_html
+from gp_control_plane.web.ui import static_root
+from gp_control_plane.web.vendor.bottle import Bottle, HTTPResponse, request, response, static_file
 
 _STORAGE_ERROR_JSON = error_payload("storage_unavailable", "Storage is temporarily unavailable.")
 
@@ -140,7 +141,7 @@ def create_bottle_app(
         return handler
 
     def root_page() -> HTTPResponse:
-        html = bottle_index_html()
+        html = ui_index_html()
         data = html.encode("utf-8")
         if request.method == "HEAD":
             return HTTPResponse(
@@ -332,5 +333,14 @@ def create_bottle_app(
             app.route(spec.path, method="GET")(download_backup_archive)
         elif dispatch == "upload":
             app.route(spec.path, method="POST")(upload_backup)
+
+    def static_asset(filepath: str) -> Any:
+        served = static_file(filepath, root=str(static_root()))
+        if isinstance(served, HTTPResponse):
+            served.set_header("Cache-Control", "public, max-age=31536000, immutable")
+        return served
+
+    if ui_enabled:
+        app.route("/static/<filepath:path>", method="GET")(static_asset)
 
     return app

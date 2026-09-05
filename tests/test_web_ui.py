@@ -35,7 +35,22 @@ from gp_control_plane.storage import SCHEMA_VERSION, append_run, read_app_settin
 from gp_control_plane.web import app as web_app
 from gp_control_plane.web import docs as web_docs
 from gp_control_plane.web import routes as web_routes
-from gp_control_plane.web.app import index_html, serve, serve_core
+from gp_control_plane.web.app import index_html as _index_html_shell
+from gp_control_plane.web.app import serve, serve_core
+from gp_control_plane.web.ui import static_root
+
+
+def index_html() -> str:
+    """Shell plus inline CSS/JS transcripts for legacy UI source-contract tests."""
+    css = "\n".join(
+        (static_root() / "css" / name).read_text(encoding="utf-8")
+        for name in sorted(p.name for p in (static_root() / "css").glob("*.css"))
+    )
+    js = "\n".join(
+        (static_root() / "js" / name).read_text(encoding="utf-8")
+        for name in sorted(p.name for p in (static_root() / "js").glob("*.js"))
+    )
+    return _index_html_shell() + "<style>\n" + css + "\n</style>\n<script>\n" + js + "\n</script>"
 
 
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -2007,10 +2022,14 @@ class WebUiTests(unittest.TestCase):
             tmp = Path(raw)
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
             port = start_server(serve, config).port
-            status, _headers, body = _http_request(port, "/")
+            status, headers, body = _http_request(port, "/")
             self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
+            self.assertEqual(headers.get("cache-control"), "no-store")
             html = body.decode("utf-8", errors="replace")
-            self.assertEqual(html.count("<style>"), 2)
+            self.assertEqual(html.count("<style>"), 0)
+            self.assertEqual(html.count("<script>"), 0)
+            self.assertIn('<link rel="stylesheet" href="/static/css/', html)
+            self.assertIn('<script src="/static/js/', html)
 
     def test_openapi_paths_are_callable_through_web_runtime(self) -> None:
         self._run_web_runtime_openapi_contract()
