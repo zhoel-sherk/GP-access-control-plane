@@ -344,7 +344,7 @@ def cleanup_nft_blockcheck_tables() -> None:
 def _blockcheck_nft_tables(output: str) -> list[tuple[str, str]]:
     tables: list[tuple[str, str]] = []
     for line in output.splitlines():
-        match = re.match(r"\s*table\s+(\S+)\s+(blockcheck\d+)\s*$", line)
+        match = re.match(r"\s*table\s+(\S+)\s+(blockcheck\d+(?:_test)?)\s*$", line)
         if match:
             tables.append((match.group(1), match.group(2)))
     return tables

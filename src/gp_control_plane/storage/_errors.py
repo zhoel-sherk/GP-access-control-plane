@@ -1,7 +1,10 @@
 """gp_control_plane.storage._errors — moved from storage.py (split)."""
 from __future__ import annotations
 
+import logging
 import sqlite3
+
+log = logging.getLogger(__name__)
 
 
 class StorageUnavailableError(RuntimeError):
@@ -42,5 +45,10 @@ def is_storage_unavailable_error(error: BaseException) -> bool:
 def _raise_storage_unavailable(error: sqlite3.OperationalError) -> None:
     """Map only known temporary SQLite availability failures to a stable error."""
     if is_storage_unavailable_error(error):
+        log.error(
+            "storage unavailable mapped to 503; sqlite_errorcode=%r message=%r",
+            getattr(error, "sqlite_errorcode", None),
+            str(error),
+        )
         raise StorageUnavailableError("storage is temporarily unavailable") from error
     raise error

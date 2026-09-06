@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from gp_control_plane.discovery_engine import (
     is_blockchecks_job,
     normalize_engine,
 )
+from gp_control_plane.engine_cleaner import force_clean_engine_switch
 from gp_control_plane.settings import read_run_settings, save_run_settings
 from gp_control_plane.state import now_iso, read_state
 from gp_control_plane.storage import append_run
@@ -37,6 +39,8 @@ from gp_control_plane.web.api_server._jobs import (
     _job_discovery,
 )
 from gp_control_plane.zapret2 import cleanup_nft_blockcheck_tables
+
+log = logging.getLogger(__name__)
 
 
 def _ctx_query(ctx: HandlerContext) -> dict[str, list[str]]:
@@ -211,6 +215,18 @@ def core_start_run(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
     name, core_payload = core_api.strategy_discovery_job_payload(incoming)
     if is_blockchecks_job(name) and campaign_lock_busy_message():
         raise RuntimeBusyError()
+    # Starting an engine different from the one that produced the previous
+    # run may leave host residue behind (nft *_test tables, bs netns/shm).
+    # Force-clean the engine being left, best-effort, before launching.
+    try:
+        cleanup = force_clean_engine_switch(
+            ctx.config.output.state_dir,
+            str(core_payload.get("discovery_engine") or "blockcheck2"),
+        )
+        if cleanup.get("cleaned"):
+            log.info("engine switch cleanup before %s: %s", name, cleanup)
+    except Exception:  # noqa: BLE001 — cleanup must never block run start
+        log.warning("engine switch cleanup failed; continuing run start", exc_info=True)
     func = lambda stop, run_id: _job_discovery(ctx.config, name, core_payload, stop, run_id)
     cancel_hook = stop_blockchecks if is_blockchecks_job(name) else cleanup_nft_blockcheck_tables
     job = ctx.runner.start(name, func, cancel_hook=cancel_hook, run_id=resume_run_id_override)
