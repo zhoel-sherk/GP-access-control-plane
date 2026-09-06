@@ -379,6 +379,19 @@ async function exportNfconfNow(){
     setMessage(error.message, 'bad');
   }
 }
+function triageSummary(domain, data){
+  const t = (data && data.triage) || {};
+  const phase = (t.domain_phases && t.domain_phases[domain]) || t.handshake_phase || 'unknown';
+  const dns = t.dns_hijacked ? 'dns-hijack' : t.dns_sinkhole ? 'sinkhole' : 'dns-ok';
+  const extras = [];
+  if (t.rst_at_sni) extras.push('rst@SNI');
+  if (t.silent_drop_after_sni) extras.push('silent-drop');
+  if (t.udp_blocked) extras.push('udp-blocked');
+  if (t.quic_drop) extras.push('quic-drop');
+  if (t.bandwidth_throttled) extras.push('throttled');
+  if (t.voice_ok) extras.push('voice-ok');
+  return `ok (${phase} · ${dns}${extras.length ? ' · ' + extras.join(' · ') : ''}${data.provider ? ' · ' + data.provider : ''})`;
+}
 async function runTriageNow(){
   const domains = finderDomains();
   if (!domains.length) {
@@ -390,8 +403,14 @@ async function runTriageNow(){
   try {
     const data = await getJson(`${apiEndpoint('core', 'triage')}?domain=${encodeURIComponent(target)}`);
     if (data && data.status === 'ok') {
-      const info = JSON.stringify(data.checks || data.output || data);
-      setMessage(`Triage ${target}: ${info}`, 'good');
+      setMessage(`Triage ${target}: ${triageSummary(target, data)}`, 'good');
+      const logNode = el('finder-log');
+      if (logNode) {
+        logNode.textContent = `[triage ${target} ${new Date().toLocaleTimeString()}]\n` +
+          JSON.stringify(data, null, 2);
+        const raw = document.querySelector('.raw-log-panel');
+        if (raw) raw.open = true;
+      }
     } else {
       setMessage(`Triage ${target} ошибка: ${(data && data.message) || 'неизвестный сбой'}`, 'bad');
     }
