@@ -72,15 +72,7 @@
                 <span class="domain-title">Расширенные параметры</span>
                 <span class="helper-text">глубина, повторы, DNS/IP-check, лимиты и timeout</span>
               </summary>
-            <div class="field">
-              <label for="finder-discovery-engine">Движок подбора</label>
-              <select id="finder-discovery-engine">
-                <option value="blockcheck2">blockcheck2.sh (zapret2)</option>
-                <option value="blockchecks">blockcheckS (`bs scan`)</option>
-              </select>
-              <div class="helper-text">blockcheck2 — штатный stdout-парсер. blockcheckS — матрица `bs scan`, без эмуляции маркеров AVAILABLE. Не стартует многосуточный `bs full`.</div>
-            </div>
-            <div class="bs-options" id="bs-options" hidden>
+            <div class="bs-options" id="bs-options" data-engine="blockchecks" hidden>
               <div class="field">
                 <label for="bs-strategy-preset">Пресет стратегий (blockcheckS)</label>
                 <select id="bs-strategy-preset">

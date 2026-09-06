@@ -32,6 +32,11 @@ async function refreshBsPreflight(){
 }
 function syncEngineUi(){
   const active = engineIsBlockchecks();
+  setTopbarDiscoveryEngine(active ? 'blockchecks' : 'blockcheck2');
+  syncTopbarEngineBusyState();
+  document.querySelectorAll('[data-engine="blockchecks"]').forEach((node) => {
+    node.hidden = !active;
+  });
   const bsOptions = el('bs-options');
   if (bsOptions) bsOptions.hidden = !active;
   BS_ONLY_HIDDEN_IDS.forEach((id) => hideFieldRow(id, active));
@@ -40,6 +45,35 @@ function syncEngineUi(){
     button.title = active ? '' : 'Экспорт nfqws2 (bc-nfconf) доступен при движке blockcheckS';
   });
   if (active && !state.bsPreflight) refreshBsPreflight();
+}
+async function persistTopbarDiscoveryEngine(value){
+  const engine = value === 'blockchecks' ? 'blockchecks' : 'blockcheck2';
+  const previous = String((state.settings || {}).discovery_engine || 'blockcheck2');
+  if (isBusy()) {
+    setTopbarDiscoveryEngine(previous);
+    const message = 'нельзя сменить во время подбора';
+    setMessage(message, 'warn');
+    showToast(message, 'warn');
+    return;
+  }
+  setTopbarDiscoveryEngine(engine);
+  syncEngineUi();
+  renderRunLaunchSummary();
+  if (engine === previous) return;
+  try {
+    const payload = { ...currentSettingsFromForm(), discovery_engine: engine };
+    const data = await saveRunSettingsPayload(payload);
+    state.settings = data.settings || { ...(state.settings || {}), discovery_engine: engine };
+    state.settingsTouched = false;
+    refreshBsPreflight();
+    renderRunLaunchSummary();
+    setMessage(engine === 'blockchecks' ? 'Движок: blockcheckS' : 'Движок: blockcheck2', 'good');
+  } catch (error) {
+    setTopbarDiscoveryEngine(previous);
+    syncEngineUi();
+    renderRunLaunchSummary();
+    setMessage(`Ошибка смены движка: ${error.message}`, 'bad');
+  }
 }
 function discoveryOptions(){
   const timeouts = runTimeoutSettings();

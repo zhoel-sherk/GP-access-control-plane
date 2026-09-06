@@ -66,6 +66,18 @@ h1 { font-size: 24px; line-height: 1.2; margin: 0; letter-spacing: 0; }
   font-weight: 700;
 }
 .topbar-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.topbar-engine {
+  grid-template-columns: auto auto;
+  gap: 4px;
+}
+.topbar-engine .segment-option {
+  min-height: 32px;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+.topbar-engine.is-disabled {
+  opacity: .55;
+}
 .main {
   max-width: 1240px;
   margin: 0 auto;

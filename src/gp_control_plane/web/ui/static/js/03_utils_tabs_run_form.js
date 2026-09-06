@@ -225,10 +225,25 @@ function runTimeoutSettings(){
   };
 }
 function selectedDiscoveryEngine(){
-  const finder = el('finder-discovery-engine');
-  if (finder && finder.value) return finder.value;
-  const settings = el('settings-discovery-engine');
-  if (settings && settings.value) return settings.value;
+  const checked = document.querySelector('input[name="topbar-discovery-engine"]:checked');
+  if (checked && checked.value) return checked.value;
   return String((state.settings || {}).discovery_engine || 'blockcheck2');
+}
+function setTopbarDiscoveryEngine(value){
+  const engine = value === 'blockchecks' ? 'blockchecks' : 'blockcheck2';
+  document.querySelectorAll('input[name="topbar-discovery-engine"]').forEach((input) => {
+    input.checked = input.value === engine;
+  });
+}
+function syncTopbarEngineBusyState(){
+  const busy = isBusy();
+  const group = el('topbar-discovery-engine');
+  if (group) {
+    group.classList.toggle('is-disabled', busy);
+    group.title = busy ? 'нельзя сменить во время подбора' : 'Движок подбора';
+  }
+  document.querySelectorAll('input[name="topbar-discovery-engine"]').forEach((input) => {
+    input.disabled = busy;
+  });
 }
 const BS_ONLY_HIDDEN_IDS = ['enable-http', 'include-quic', 'enable-ipv6', 'run-curl-max-time-quic', 'run-curl-max-time-doh'];

@@ -1,3 +1,4 @@
+state.customPresets = loadCustomPresets();
 document.addEventListener('submit', (event) => {
   if (event.target && event.target.id === 'login-form') {
     submitLogin(event);
@@ -317,17 +318,9 @@ document.addEventListener('change', (event) => {
   if (event.target && String(event.target.id || '').startsWith('settings-')) {
     state.settingsTouched = true;
   }
-  if (event.target && event.target.id === 'finder-discovery-engine') {
-    const settingsEngine = el('settings-discovery-engine');
-    if (settingsEngine) settingsEngine.value = event.target.value;
-    syncEngineUi();
-    renderRunLaunchSummary();
-  }
-  if (event.target && event.target.id === 'settings-discovery-engine') {
-    const finderEngine = el('finder-discovery-engine');
-    if (finderEngine) finderEngine.value = event.target.value;
-    syncEngineUi();
-    renderRunLaunchSummary();
+  if (event.target && event.target.name === 'topbar-discovery-engine') {
+    persistTopbarDiscoveryEngine(event.target.value);
+    return;
   }
   if (event.target && String(event.target.id || '').startsWith('v2fly-')) {
     if (event.target.id === 'v2fly-category-search') {
