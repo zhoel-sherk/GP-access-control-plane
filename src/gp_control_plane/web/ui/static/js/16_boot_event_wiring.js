@@ -1,3 +1,4 @@
+state.customPresets = loadCustomPresets();
 document.addEventListener('submit', (event) => {
   if (event.target && event.target.id === 'login-form') {
     submitLogin(event);
