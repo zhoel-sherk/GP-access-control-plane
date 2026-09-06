@@ -1,16 +1,11 @@
-"""api_server runtime recovery helpers + composed request handler — moved from api_server.py."""
+"""api_server runtime recovery helpers — moved from api_server.py."""
 
 from __future__ import annotations
 
-from http.server import BaseHTTPRequestHandler
 from typing import Any
 
 from gp_control_plane.config import AppConfig
 from gp_control_plane.state import active_job_lock_payload, read_state, update_state
-from gp_control_plane.web.api_server._events import EventsMixin
-from gp_control_plane.web.api_server._get import GetMixin
-from gp_control_plane.web.api_server._http import HttpMixin
-from gp_control_plane.web.api_server._post import PostMixin
 from gp_control_plane.zapret2 import (
     recover_quarantined_process_run,
     recover_registered_process_runs,
@@ -19,10 +14,6 @@ from gp_control_plane.zapret2 import (
 _ROOT_MANAGED_DISCOVERY_NAMES = frozenset(
     {"zapret-standard-discovery", "zapret-multi-domain-discovery"}
 )
-
-
-class ApiHandler(HttpMixin, EventsMixin, GetMixin, PostMixin, BaseHTTPRequestHandler):
-    """Composed HTTP request handler for the GP control plane API and web UI."""
 
 
 def _recover_runtime_before_serve(config: AppConfig) -> None:

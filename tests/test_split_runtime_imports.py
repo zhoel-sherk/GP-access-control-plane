@@ -23,7 +23,6 @@ import gp_control_plane.web.core_server
 blocked = [
     name for name in (
         "gp_control_plane.web.app",
-        "gp_control_plane.web.proxy",
         "gp_control_plane.web.ui",
     )
     if name in sys.modules
@@ -33,7 +32,7 @@ if blocked:
 """
         self._run_clean_python(code)
 
-    def test_serve_core_uses_api_server_without_importing_web_app(self) -> None:
+    def test_serve_core_uses_bottle_factory_without_importing_web_app(self) -> None:
         code = """
 import importlib.abc
 import sys
@@ -42,7 +41,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path.cwd() / "src"))
 
 from gp_control_plane.config import AppConfig, OutputConfig
-from gp_control_plane.web import api_server, core_server
+from gp_control_plane.web import core_server
+from gp_control_plane.web import server as web_server
 
 class BlockWebAppImport(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path, target=None):
@@ -50,22 +50,22 @@ class BlockWebAppImport(importlib.abc.MetaPathFinder):
             raise ImportError("web.app must not be imported by core runtime")
         return None
 
-class FakeServer:
+class FakeWSGIServer:
     def __init__(self, address, handler):
         self.address = address
         self.handler = handler
+    def set_app(self, app):
+        self.app = app
     def serve_forever(self):
         print("fake-server-started")
 
 sys.meta_path.insert(0, BlockWebAppImport())
-api_server.ThreadingHTTPServer = FakeServer
+web_server.ThreadingWSGIServer = FakeWSGIServer
 with tempfile.TemporaryDirectory() as raw:
     config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
     core_server.serve_core(config, host="127.0.0.1", port=18081)
 if "gp_control_plane.web.app" in sys.modules:
     raise SystemExit("web.app was imported")
-if "gp_control_plane.web.api_server" not in sys.modules:
-    raise SystemExit("api_server was not imported")
 """
         self._run_clean_python(code)
 

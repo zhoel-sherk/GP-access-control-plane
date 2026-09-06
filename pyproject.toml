@@ -32,7 +32,7 @@ addopts = "-m \"not integration and not quality\""
 [tool.coverage.run]
 branch = true
 source = ["gp_control_plane"]
-omit = ["*/web/ui/parts/*"]
+omit = ["*/web/ui/parts/*", "*/web/vendor/*"]
 
 [tool.coverage.report]
 show_missing = true
@@ -44,7 +44,7 @@ fail_under = 70
 target-version = "py311"
 line-length = 100
 src = ["src", "tests"]
-extend-exclude = ["dev", "scripts", "coverage"]
+extend-exclude = ["dev", "scripts", "coverage", "src/gp_control_plane/web/vendor"]
 
 [tool.ruff.lint]
 # Gate rule set — deliberately avoids mass churn on low-signal legacy style
@@ -61,7 +61,7 @@ ignore = [
 
 [tool.vulture]
 paths = ["src"]
-exclude = ["__pycache__"]
+exclude = ["__pycache__", "src/gp_control_plane/web/vendor"]
 min_confidence = 80
 sort_by_size = true
 

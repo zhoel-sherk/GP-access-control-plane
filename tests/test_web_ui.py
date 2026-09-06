@@ -35,7 +35,22 @@ from gp_control_plane.storage import SCHEMA_VERSION, append_run, read_app_settin
 from gp_control_plane.web import app as web_app
 from gp_control_plane.web import docs as web_docs
 from gp_control_plane.web import routes as web_routes
-from gp_control_plane.web.app import index_html, serve, serve_core, serve_web_proxy
+from gp_control_plane.web.app import index_html as _index_html_shell
+from gp_control_plane.web.app import serve, serve_core
+from gp_control_plane.web.ui import static_root
+
+
+def index_html() -> str:
+    """Shell plus inline CSS/JS transcripts for legacy UI source-contract tests."""
+    css = "\n".join(
+        (static_root() / "css" / name).read_text(encoding="utf-8")
+        for name in sorted(p.name for p in (static_root() / "css").glob("*.css"))
+    )
+    js = "\n".join(
+        (static_root() / "js" / name).read_text(encoding="utf-8")
+        for name in sorted(p.name for p in (static_root() / "js").glob("*.js"))
+    )
+    return _index_html_shell() + "<style>\n" + css + "\n</style>\n<script>\n" + js + "\n</script>"
 
 
 def _json_object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -1640,8 +1655,7 @@ class WebUiTests(unittest.TestCase):
                 },
             )
             authorization = _bearer_authorization_for_state(config.output.state_dir)
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
+            port = start_server(serve, config).port
 
             contract = json.loads(web_app.openapi_json_bytes().decode("utf-8"))
             item_schema = contract["components"]["schemas"]["RunHistoryItem"]
@@ -1649,7 +1663,7 @@ class WebUiTests(unittest.TestCase):
             self.assertNotIn("id", item_schema["properties"])
 
             for path in ("/api/core/runs/history", "/api/web/runs/history-page"):
-                status, _headers, body = _http_request(web_port, path, headers={"Authorization": authorization})
+                status, _headers, body = _http_request(port, path, headers={"Authorization": authorization})
                 self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
                 item = json.loads(body.decode("utf-8"))["runs"][0]
                 self.assertEqual(item["run_id"], "run-contract")
@@ -1954,12 +1968,11 @@ class WebUiTests(unittest.TestCase):
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            with mock.patch("gp_control_plane.web.api_server._http.MAX_JSON_REQUEST_BYTES", 10):
+            with mock.patch("gp_control_plane.web.limits.MAX_JSON_REQUEST_BYTES", 10):
                 monolith_port = start_server(serve, config).port
                 core_port = start_server(serve_core, config).port
-                proxy_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
 
-                for port in (monolith_port, core_port, proxy_port):
+                for port in (monolith_port, core_port):
                     for method, path, payload, headers in representative_legacy_requests:
                         if isinstance(payload, bytes):
                             raw_body = payload
@@ -1989,14 +2002,14 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn("from .app import", source)
         self.assertNotIn("gp_control_plane.web.app", source)
 
-    def test_core_server_uses_api_server_entrypoint(self) -> None:
-        from gp_control_plane.web import api_server, core_server
+    def test_core_server_uses_bottle_factory_entrypoint(self) -> None:
+        from gp_control_plane.web import core_server
 
         config = AppConfig(output=OutputConfig(state_dir=Path("unused-state")))
-        with mock.patch.object(api_server, "serve") as serve_mock:
+        with mock.patch("gp_control_plane.web.bottle_server.serve_web_bottle") as serve_bottle_mock:
             core_server.serve_core(config, host="127.0.0.1", port=18081)
 
-        serve_mock.assert_called_once_with(config, host="127.0.0.1", port=18081, ui_enabled=False)
+        serve_bottle_mock.assert_called_once_with(config, host="127.0.0.1", port=18081, ui_enabled=False)
 
     def test_web_app_is_api_server_compatibility_alias(self) -> None:
         app_module = importlib.import_module("gp_control_plane.web.app")
@@ -2004,7 +2017,51 @@ class WebUiTests(unittest.TestCase):
 
         self.assertIs(app_module, api_module)
 
+    def test_serve_runtime_hosts_bottle_web_ui(self) -> None:
+        with _captured_server_temporary_directory() as (raw, start_server):
+            tmp = Path(raw)
+            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
+            port = start_server(serve, config).port
+            status, headers, body = _http_request(port, "/")
+            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            html = body.decode("utf-8", errors="replace")
+            self.assertEqual(html.count("<style>"), 0)
+            self.assertEqual(html.count("<script>"), 0)
+            self.assertIn('<link rel="stylesheet" href="/static/css/', html)
+            self.assertIn('<script src="/static/js/', html)
+
+    def test_static_assets_are_served_immutable_with_no_inline_production_output(self) -> None:
+        with _captured_server_temporary_directory() as (raw, start_server):
+            tmp = Path(raw)
+            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
+            port = start_server(serve, config).port
+
+            status, headers, body = _http_request(port, "/")
+            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
+            self.assertEqual(headers.get("cache-control"), "no-store")
+            html = body.decode("utf-8", errors="replace")
+            self.assertEqual(html.count("<style>"), 0)
+            self.assertEqual(html.count("<script>"), 0)
+
+            asset_urls: list[str] = []
+            for subdir in ("css", "js"):
+                for name in sorted(p.name for p in (static_root() / subdir).glob("*") if p.is_file()):
+                    self.assertIn(f"/static/{subdir}/{name}?v=", html, name)
+                    asset_urls.append(f"/static/{subdir}/{name}?v=guard")
+
+            for url in asset_urls:
+                status, headers, _body = _http_request(port, url, authenticated=False)
+                self.assertEqual(status, 200, url)
+                self.assertTrue(
+                    headers.get("cache-control", "").startswith("public, max-age=31536000, immutable"),
+                    (url, headers.get("cache-control")),
+                )
+
     def test_openapi_paths_are_callable_through_web_runtime(self) -> None:
+        self._run_web_runtime_openapi_contract()
+
+    def _run_web_runtime_openapi_contract(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
             tmp = Path(raw)
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
@@ -2057,13 +2114,17 @@ class WebUiTests(unittest.TestCase):
                     },
                 ),
                 mock.patch(
-                    "gp_control_plane.web.api_server._post.export_nfconf",
+                    "gp_control_plane.web.api.core.export_nfconf",
                     return_value={
                         "engine": "blockchecks",
                         "out_dir": "/tmp/nfconf-out",
                         "paths": ["/tmp/nfconf-out/nfqws2.conf"],
                         "db": "/tmp/state.db",
                     },
+                ),
+                mock.patch(
+                    "gp_control_plane.web.api.core.bs_triage_domain",
+                    side_effect=lambda domain: {"domain": domain, "status": "ok", "checks": []},
                 ),
             ):
                 port = start_server(serve, config).port
@@ -2258,185 +2319,6 @@ class WebUiTests(unittest.TestCase):
                 self.assertEqual(old_headers.get("content-type"), "application/json; charset=utf-8")
                 self.assertIn("not found", old_body.decode("utf-8"))
 
-    def test_openapi_paths_are_callable_through_split_core_and_web_proxy_runtime(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            web_app.save_settings(config, {"curl_parallelism_max": 50, "curl_parallelism_default": 10})
-            snapshot = web_app.create_snapshot_if_idle(config.output.state_dir)["snapshot"]["id"]
-            release = {
-                "channel": "stable",
-                "available_version": "v0.0.0-test",
-                "url": "https://example.invalid/release",
-                "published_at": "",
-            }
-
-            def create_post_run_snapshot(_state_dir: Path) -> dict[str, object]:
-                return {
-                    "kind": "snapshot",
-                    "status": "success",
-                    "completed_at": "2026-08-13T00:00:00Z",
-                    "snapshot_id": "openapi-contract-post-run-snapshot",
-                    "snapshot": {"id": "openapi-contract-post-run-snapshot"},
-                }
-
-            with (
-                mock.patch("gp_control_plane.web.api_server._jobs.run_multi_domain_discovery", return_value={"status": "success"}),
-                mock.patch("gp_control_plane.web.api_server._jobs.run_standard_discovery", return_value={"status": "success"}),
-                mock.patch(
-                    "gp_control_plane.web.api_server._post.export_nfconf",
-                    return_value={
-                        "engine": "blockchecks",
-                        "out_dir": "/tmp/nfconf-out",
-                        "paths": ["/tmp/nfconf-out/nfqws2.conf"],
-                        "db": "/tmp/state.db",
-                    },
-                ),
-                mock.patch.object(web_app.service_api, "release_channel_info", return_value=release),
-                mock.patch.object(web_app.service_api, "fetch_v2fly_revision", return_value="remote-test-revision"),
-                mock.patch.object(web_app.service_api, "prepare_v2fly_local_storage", return_value={"count": 0}),
-                mock.patch.object(web_app, "create_post_run_snapshot", side_effect=create_post_run_snapshot) as post_run_snapshot,
-                _JobRunnerThreadTracker() as runner_threads,
-            ):
-                core_port = start_server(serve_core, config).port
-                web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-                openapi_contract = json.loads(
-                    web_app.openapi_json_bytes().decode("utf-8"),
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                core_openapi_status, core_openapi_headers, core_openapi_body = _http_request(core_port, "/openapi.json")
-                proxy_openapi_status, proxy_openapi_headers, proxy_openapi_body = _http_request(web_port, "/openapi.json")
-                self.assertEqual(core_openapi_status, 200)
-                self.assertEqual(core_openapi_headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertEqual(proxy_openapi_status, 200)
-                self.assertEqual(proxy_openapi_headers.get("content-type"), "application/json; charset=utf-8")
-                full_openapi_text = web_app.openapi_json_bytes().decode("utf-8")
-                core_openapi_text = core_openapi_body.decode("utf-8")
-                proxy_openapi_text = proxy_openapi_body.decode("utf-8")
-                self.assertIn("/api/web", full_openapi_text)
-                self.assertIn("/api/web", proxy_openapi_text)
-                core_openapi_contract = json.loads(
-                    core_openapi_text,
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                proxy_openapi_contract = json.loads(
-                    proxy_openapi_text,
-                    object_pairs_hook=_json_object_without_duplicate_keys,
-                )
-                core_openapi_operations = {
-                    (path, method.upper())
-                    for path, operations in core_openapi_contract["paths"].items()
-                    for method in operations
-                }
-                proxy_openapi_operations = {
-                    (path, method.upper())
-                    for path, operations in proxy_openapi_contract["paths"].items()
-                    for method in operations
-                }
-                self.assertEqual(core_openapi_operations, web_routes.openapi_operations(core_only=True))
-                self.assertFalse(any(path.startswith("/api/web/") for path in core_openapi_contract["paths"]))
-                self.assertEqual(proxy_openapi_operations, web_routes.openapi_operations())
-                self.assertTrue(any(path.startswith("/api/web/") for path in proxy_openapi_contract["paths"]))
-                expected = {(method.upper(), path) for path, ops in openapi_contract["paths"].items() for method in ops}
-                web_expected = {
-                    (method, path)
-                    for method, path in expected
-                    if web_routes.route_for(method, path) and web_routes.route_for(method, path).namespace == "web"
-                }
-                core_checked: set[tuple[str, str]] = set()
-                proxy_checked: set[tuple[str, str]] = set()
-                successful_start_requests = 0
-                for runtime, port in (("core", core_port), ("proxy", web_port)):
-                    for path, operations in openapi_contract["paths"].items():
-                        for raw_method, operation in operations.items():
-                            method = raw_method.upper()
-                            request_path, raw_body, request_headers = _openapi_test_request(
-                                openapi_contract,
-                                path,
-                                method,
-                                operation,
-                                snapshot,
-                            )
-                            route = web_routes.route_for(method, path)
-                            if runtime == "core" and route and route.namespace == "web":
-                                status, _headers, response_body = _http_request(
-                                    port,
-                                    request_path,
-                                    method=method,
-                                    body=raw_body,
-                                    headers=request_headers,
-                                )
-                                message = (runtime, method, request_path, status, response_body.decode("utf-8", errors="replace")[:500])
-                                self.assertEqual(status, 404, message)
-                                continue
-                            if path == "/api/web/events/stream" and method == "GET":
-                                status, headers, first_line, second_line = _http_sse_first_event(port, request_path)
-                                message = (runtime, method, request_path, status, first_line, second_line)
-                                proxy_checked.add((method, path))
-                                self.assertEqual(status, 200, message)
-                                self.assertEqual(headers.get("content-type"), "text/event-stream; charset=utf-8", message)
-                                self.assertEqual(first_line, "event: status", message)
-                                self.assertTrue(second_line.startswith("data:"), message)
-                                continue
-                            status, headers, response_body = _http_request(
-                                port,
-                                request_path,
-                                method=method,
-                                body=raw_body,
-                                headers=request_headers,
-                            )
-                            message = (runtime, method, request_path, status, response_body.decode("utf-8", errors="replace")[:500])
-                            if runtime == "core":
-                                core_checked.add((method, path))
-                            else:
-                                proxy_checked.add((method, path))
-                            _assert_openapi_response_contract(
-                                self,
-                                openapi_contract,
-                                operation,
-                                status,
-                                headers,
-                                response_body,
-                                context=message,
-                            )
-                            if path == "/api/core/backups/download-archive" and status == 200:
-                                self.assertGreater(len(response_body), 0, message)
-                            if path == "/api/core/strategy-discovery/start-run" and method == "POST":
-                                self.assertEqual(status, 202, message)
-                                successful_start_requests += 1
-                                runner_threads.join_tracked()
-
-                core_head_status, core_head_headers, core_head_body = _http_request(
-                    core_port,
-                    "/api/web/events/stream",
-                    method="HEAD",
-                )
-                proxy_head_status, proxy_head_headers, proxy_head_body = _http_request(
-                    web_port,
-                    "/api/web/events/stream",
-                    method="HEAD",
-                )
-                self.assertEqual(core_head_status, 404)
-                self.assertEqual(core_head_headers.get("content-type"), "application/json; charset=utf-8")
-                self.assertEqual(core_head_body, b"")
-                self.assertEqual(proxy_head_status, 200)
-                self.assertEqual(proxy_head_headers.get("content-type"), "text/event-stream; charset=utf-8")
-                self.assertEqual(proxy_head_body, b"")
-                self.assertEqual(expected - web_expected, core_checked)
-                self.assertEqual(expected, proxy_checked)
-                self.assertEqual(successful_start_requests, 2)
-                self.assertEqual(runner_threads.tracked_count, successful_start_requests)
-                self.assertEqual(post_run_snapshot.call_count, successful_start_requests)
-
-                for runtime, port in (("core", core_port), ("proxy", web_port)):
-                    old_status, old_headers, old_body = _http_request(
-                        port,
-                        f"/api/core/backups/download-file?snapshot_id={snapshot}",
-                    )
-                    self.assertEqual(old_status, 404, runtime)
-                    self.assertEqual(old_headers.get("content-type"), "application/json; charset=utf-8", runtime)
-                    self.assertIn("not found", old_body.decode("utf-8"), runtime)
 
     def test_core_delete_user_domain_lists_requires_explicit_non_empty_ids(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -2613,7 +2495,7 @@ class WebUiTests(unittest.TestCase):
             tmp = Path(raw)
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
             authorization = _bearer_authorization_for_state(config.output.state_dir)
-            with mock.patch("gp_control_plane.web.api_server._http.MAX_JSON_REQUEST_BYTES", 10):
+            with mock.patch("gp_control_plane.web.limits.MAX_JSON_REQUEST_BYTES", 10):
                 port = start_server(serve, config).port
 
                 status, headers, body = _http_request(
@@ -2634,8 +2516,8 @@ class WebUiTests(unittest.TestCase):
             tmp = Path(raw)
             config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
             with (
-                mock.patch("gp_control_plane.web.api_server._http.MAX_BACKUP_UPLOAD_BYTES", 10),
-                mock.patch("gp_control_plane.web.api_server._post.import_snapshot_archive") as import_mock,
+                mock.patch("gp_control_plane.web.limits.MAX_BACKUP_UPLOAD_BYTES", 10),
+                mock.patch("gp_control_plane.backups.import_snapshot_archive") as import_mock,
             ):
                 port = start_server(serve, config).port
 
@@ -2698,184 +2580,6 @@ class WebUiTests(unittest.TestCase):
                 self.assertEqual(response_headers.get("content-type"), "application/json; charset=utf-8", message)
                 self.assertApiError(json.loads(response_body.decode("utf-8")), "runtime_busy")
 
-    def test_web_proxy_serves_ui_and_forwards_api_to_core(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(
-                output=OutputConfig(
-                    state_dir=tmp / "state",
-                ),
-            )
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-            connection = http.client.HTTPConnection("127.0.0.1", web_port, timeout=5)
-            connection.request("GET", "/")
-            root_response = connection.getresponse()
-            root_body = root_response.read().decode("utf-8")
-            connection.close()
-
-            core_status, _core_headers, core_body = _http_request(web_port, "/api/core/status")
-            service_status, _service_headers, service_body = _http_request(web_port, "/api/service/status")
-            web_status, _web_headers, web_body = _http_request(web_port, "/api/web/run-preferences")
-            legacy_status, _legacy_headers, legacy_body = _http_request(web_port, "/api/status")
-
-            self.assertEqual(root_response.status, 200)
-            self.assertIn("<!doctype html>", root_body.lower())
-            self.assertEqual(core_status, 200)
-            self.assertIn('"state"', core_body.decode("utf-8"))
-            self.assertEqual(service_status, 200)
-            self.assertIn('"version"', service_body.decode("utf-8"))
-            self.assertEqual(web_status, 200)
-            self.assertIn('"run_preferences"', web_body.decode("utf-8"))
-            self.assertEqual(legacy_status, 404)
-            self.assertIn("not found", legacy_body.decode("utf-8"))
-
-    def test_web_proxy_forwards_post_body_and_query_to_core(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-            status, headers, body = _http_request(
-                web_port,
-                "/api/core/run-settings/save",
-                method="POST",
-                body=json.dumps({"curl_parallelism_default": 17, "curl_parallelism_max": 50}).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-            )
-            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
-            self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertEqual(17, json.loads(body.decode("utf-8"))["curl_parallelism_default"])
-
-            status, _headers, body = _http_request(web_port, "/api/web/runs/history-page?limit=1&offset=2")
-            self.assertEqual(status, 200, body.decode("utf-8", errors="replace"))
-            page = json.loads(body.decode("utf-8"))
-            self.assertEqual(1, page["limit"])
-            self.assertEqual(2, page["offset"])
-
-    def test_web_proxy_rejects_oversize_api_body_without_forwarding_to_core(self) -> None:
-        from gp_control_plane.web import proxy as proxy_module
-
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            authorization = _bearer_authorization_for_state(config.output.state_dir)
-            with mock.patch.object(proxy_module, "JSON_REQUEST_MAX_BYTES", 10):
-                core_port = start_server(serve_core, config).port
-                web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-                status, headers, body = _http_request(
-                    web_port,
-                    "/api/core/run-settings/save",
-                    method="POST",
-                    body=b'{"curl_parallelism_default":17}',
-                    headers={"Content-Type": "application/json", "Authorization": authorization},
-                )
-
-            self.assertEqual(status, 413)
-            self.assertEqual(headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertApiError(json.loads(body.decode("utf-8")), "request_too_large")
-            self.assertNotIn("settings", read_state(config.output.state_dir))
-
-    def test_web_proxy_serves_head_requests_without_body(self) -> None:
-        with _captured_server_temporary_directory() as (raw, start_server):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            core_port = start_server(serve_core, config).port
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{core_port}").port
-
-            root_status, root_headers, root_body = _http_request(web_port, "/", method="HEAD")
-            openapi_status, openapi_headers, openapi_body = _http_request(web_port, "/openapi.json", method="HEAD")
-
-            self.assertEqual(root_status, 200)
-            self.assertEqual(root_headers.get("content-type"), "text/html; charset=utf-8")
-            self.assertGreater(int(root_headers.get("content-length") or "0"), 0)
-            self.assertEqual(root_body, b"")
-            self.assertEqual(openapi_status, 200)
-            self.assertEqual(openapi_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertGreater(int(openapi_headers.get("content-length") or "0"), 0)
-            self.assertEqual(openapi_body, b"")
-
-    def test_web_proxy_rejects_invalid_core_url_before_listening(self) -> None:
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-
-            with self.assertRaisesRegex(ValueError, "core_url must be an http\\(s\\) URL with host"):
-                serve_web_proxy(config, "127.0.0.1", 0, core_url="127.0.0.1:8081")
-
-    def test_web_proxy_reports_bad_gateway_when_core_is_unavailable(self) -> None:
-        with (
-            _captured_server_temporary_directory() as (raw, start_server),
-            _reserved_unavailable_loopback_port() as unused_core_port,
-        ):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{unused_core_port}").port
-            protected_headers = {"Authorization": _bearer_authorization_for_state(config.output.state_dir)}
-
-            openapi_status, openapi_headers, openapi_body = _http_request(web_port, "/openapi.json")
-            swagger_status, swagger_headers, swagger_body = _http_request(web_port, "/swagger")
-            core_status, _, core_body = _http_request(web_port, "/api/core/status", headers=protected_headers)
-            web_status, web_headers, web_body = _http_request(web_port, "/api/web/run-preferences", headers=protected_headers)
-            legacy_status, legacy_headers, legacy_body = _http_request(web_port, "/api/status", headers=protected_headers)
-            unknown_status, unknown_headers, unknown_body = _http_request(web_port, "/api/unknown", headers=protected_headers)
-
-            self.assertEqual(openapi_status, 200)
-            self.assertEqual(openapi_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertIn("/api/web/run-preferences", json.loads(openapi_body.decode("utf-8"))["paths"])
-            self.assertEqual(swagger_status, 200)
-            self.assertEqual(swagger_headers.get("content-type"), "text/html; charset=utf-8")
-            self.assertIn("SwaggerUIBundle", swagger_body.decode("utf-8"))
-            self.assertEqual(core_status, 502)
-            self.assertApiError(json.loads(core_body.decode("utf-8")), "core_unavailable")
-            self.assertEqual(web_status, 200)
-            self.assertEqual(web_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertIn('"run_preferences"', web_body.decode("utf-8"))
-            self.assertEqual(legacy_status, 404)
-            self.assertEqual(legacy_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertIn("not found", legacy_body.decode("utf-8"))
-            self.assertEqual(unknown_status, 404)
-            self.assertEqual(unknown_headers.get("content-type"), "application/json; charset=utf-8")
-            self.assertIn("not found", unknown_body.decode("utf-8"))
-
-    def test_web_proxy_returns_local_404_for_unknown_core_service_routes_with_dead_core(self) -> None:
-        from gp_control_plane.web import proxy as proxy_module
-
-        with (
-            _captured_server_temporary_directory() as (raw, start_server),
-            _reserved_unavailable_loopback_port() as unused_core_port,
-        ):
-            tmp = Path(raw)
-            config = AppConfig(output=OutputConfig(state_dir=tmp / "state"))
-            authorization = _bearer_authorization_for_state(config.output.state_dir)
-            with mock.patch.object(proxy_module, "JSON_REQUEST_MAX_BYTES", 8):
-                web_port = start_server(serve_web_proxy, config, core_url=f"http://127.0.0.1:{unused_core_port}").port
-
-                cases = (
-                    ("GET", "/api/core/not-a-route", None, {}),
-                    ("GET", "/api/service/not-a-route", None, {}),
-                    ("POST", "/api/core/not-a-route", b"{bad", {"Content-Type": "application/json"}),
-                    ("POST", "/api/service/not-a-route", b"{bad", {"Content-Type": "application/json"}),
-                    ("POST", "/api/core/not-a-route", b'{"oversized":true}', {"Content-Type": "application/json"}),
-                    ("POST", "/api/service/not-a-route", b'{"oversized":true}', {"Content-Type": "application/json"}),
-                )
-                for method, path, request_body, request_headers in cases:
-                    request_headers["Authorization"] = authorization
-                    status, response_headers, response_body = _http_request(
-                        web_port,
-                        path,
-                        method=method,
-                        body=request_body,
-                        headers=request_headers,
-                    )
-                    message = (method, path, response_body.decode("utf-8", errors="replace"))
-                    self.assertEqual(status, 404, message)
-                    self.assertEqual(response_headers.get("content-type"), "application/json; charset=utf-8")
-                    self.assertApiError(json.loads(response_body.decode("utf-8")), "not_found")
-                    self.assertNotIn("core api is unavailable", response_body.decode("utf-8"), message)
-                    self.assertNotIn("request body is too large", response_body.decode("utf-8"), message)
 
     def test_protected_api_requires_bearer_token_before_app_logic(self) -> None:
         with _captured_server_temporary_directory() as (raw, start_server):
@@ -2924,267 +2628,6 @@ class WebUiTests(unittest.TestCase):
                 self.assertEqual(first_line, "event: status")
                 self.assertTrue(second_line.startswith("data:"))
 
-    def test_captured_server_close_keeps_handler_timeout_bounded(self) -> None:
-        server = mock.Mock()
-        server.request_handlers_idle.wait.return_value = False
-        server.active_request_handler_count = 1
-        thread = mock.Mock()
-        thread.is_alive.return_value = False
-        captured = _CapturedTestServer(12345, server, thread)
-
-        with mock.patch.object(socketserver.TCPServer, "server_close") as base_server_close:
-            with self.assertRaisesRegex(AssertionError, "request handlers did not stop on port 12345: 1 still active"):
-                captured.close()
-
-        server.request_handlers_idle.wait.assert_called_once()
-        wait_args, wait_kwargs = server.request_handlers_idle.wait.call_args
-        timeout = wait_args[0] if wait_args else wait_kwargs.get("timeout")
-        self.assertNotIsInstance(timeout, bool)
-        self.assertIsInstance(timeout, (int, float))
-        self.assertGreater(timeout, 0)
-        self.assertLess(timeout, float("inf"))
-        server.server_close.assert_not_called()
-        base_server_close.assert_called_once_with(server)
-
-    def test_captured_server_context_flattens_handler_wait_and_raw_close_leaves(self) -> None:
-        server = mock.Mock()
-        server.request_handlers_idle.wait.return_value = False
-        server.active_request_handler_count = 1
-        thread = mock.Mock()
-        thread.is_alive.return_value = False
-        captured = _CapturedTestServer(12345, server, thread)
-
-        with mock.patch.object(
-            socketserver.TCPServer,
-            "server_close",
-            side_effect=ValueError("raw listener close leaf failure"),
-        ):
-            with self.assertRaisesRegex(AssertionError, "original test failure") as raised:
-                with captured:
-                    self.fail("original test failure")
-
-        notes = getattr(raised.exception, "__notes__", ())
-        self.assertEqual(len(notes), 2)
-        self.assertTrue(
-            any(
-                "captured HTTP request handler wait listener 1" in note
-                and "request handlers did not stop on port 12345: 1 still active" in note
-                for note in notes
-            )
-        )
-        self.assertTrue(
-            any(
-                "captured HTTP raw listener close listener 1" in note
-                and "ValueError('raw listener close leaf failure')" in note
-                for note in notes
-            )
-        )
-
-    def test_captured_server_close_retains_each_active_socket_failure_leaf(self) -> None:
-        shutdown_failure = mock.Mock()
-        shutdown_failure.shutdown.side_effect = OSError(errno.EIO, "socket shutdown leaf failure")
-        close_failure = mock.Mock()
-        close_failure.close.side_effect = OSError(errno.EIO, "socket close leaf failure")
-
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            captured = _start_captured_server(serve, config)
-            with captured._server._request_handlers_lock:
-                captured._server._active_request_sockets.update((shutdown_failure, close_failure))
-
-            with self.assertRaises(_CleanupFailureRecords) as raised:
-                captured.close()
-
-        self.assertEqual(len(raised.exception.records), 2)
-        descriptions_by_error = {str(error): description for description, error in raised.exception.records}
-        self.assertIn("[Errno 5] socket shutdown leaf failure", descriptions_by_error)
-        self.assertIn("[Errno 5] socket close leaf failure", descriptions_by_error)
-        self.assertIn(
-            "shutdown",
-            descriptions_by_error["[Errno 5] socket shutdown leaf failure"],
-        )
-        self.assertIn(
-            "close",
-            descriptions_by_error["[Errno 5] socket close leaf failure"],
-        )
-
-    def test_captured_server_context_flattens_active_socket_failure_leaves(self) -> None:
-        shutdown_failure = mock.Mock()
-        shutdown_failure.shutdown.side_effect = OSError(errno.EIO, "socket shutdown context failure")
-        close_failure = mock.Mock()
-        close_failure.close.side_effect = OSError(errno.EIO, "socket close context failure")
-
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            captured = _start_captured_server(serve, config)
-            with self.assertRaisesRegex(AssertionError, "original test failure") as raised:
-                with captured:
-                    with captured._server._request_handlers_lock:
-                        captured._server._active_request_sockets.update((shutdown_failure, close_failure))
-                    self.fail("original test failure")
-
-        notes = getattr(raised.exception, "__notes__", ())
-        self.assertEqual(len(notes), 2)
-        self.assertTrue(
-            any(
-                "captured HTTP active request socket" in note
-                and "shutdown" in note
-                and "socket shutdown context failure" in note
-                for note in notes
-            )
-        )
-        self.assertTrue(
-            any(
-                "captured HTTP active request socket" in note
-                and "close" in note
-                and "socket close context failure" in note
-                for note in notes
-            )
-        )
-
-    def test_captured_server_context_manager_closes_server(self) -> None:
-        server = mock.Mock()
-        thread = mock.Mock()
-        thread.is_alive.return_value = False
-        captured = _CapturedTestServer(12345, server, thread)
-
-        with captured as entered:
-            self.assertIs(captured, entered)
-
-        server.shutdown.assert_called_once()
-        thread.join.assert_called_once_with(timeout=5)
-        server.close_active_request_connections.assert_called_once()
-        server.server_close.assert_called_once()
-
-    def test_captured_server_startup_failure_closes_constructed_listener(self) -> None:
-        constructed_servers: list[Any] = []
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def startup_failure(_config: AppConfig, host: str, port: int) -> None:
-            constructed_servers.append(web_app.ThreadingHTTPServer((host, port), NoopRequestHandler))
-            raise RuntimeError("intentional startup failure")
-
-        startup_failure.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with self.assertRaisesRegex(AssertionError, "server failed during startup") as raised:
-                _start_captured_server(startup_failure, config)
-
-        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
-        self.assertEqual(str(raised.exception.__cause__), "intentional startup failure")
-        self.assertEqual(len(constructed_servers), 1)
-        self.assertEqual(constructed_servers[0].socket.fileno(), -1)
-
-    def test_captured_server_abort_closes_listener_after_late_registration(self) -> None:
-        constructed_servers: list[Any] = []
-        construction_threads: list[threading.Thread] = []
-        constructor_passed_abandon_check = threading.Event()
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def wait_until_startup_is_abandoned(server: Any, startup_abandoned: threading.Event) -> None:
-            constructed_servers.append(server)
-            construction_threads.append(threading.current_thread())
-            constructor_passed_abandon_check.set()
-            self.assertTrue(startup_abandoned.wait(timeout=2))
-
-        def startup_server(_config: AppConfig, host: str, port: int) -> None:
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-
-        startup_server.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with self.assertRaisesRegex(AssertionError, "server (did not start serving|exited during startup)"):
-                _start_captured_server(
-                    startup_server,
-                    config,
-                    _startup_timeout=0.1,
-                    _after_constructor_abandon_check=wait_until_startup_is_abandoned,
-                )
-
-        self.assertTrue(constructor_passed_abandon_check.is_set())
-        self.assertEqual(len(constructed_servers), 1)
-        self.assertEqual(constructed_servers[0].socket.fileno(), -1)
-        self.assertEqual(len(construction_threads), 1)
-        self.assertFalse(construction_threads[0].is_alive())
-
-    def test_captured_server_startup_failure_closes_two_bound_listeners_in_reverse_order(self) -> None:
-        constructed_servers: list[Any] = []
-        close_order: list[Any] = []
-        raw_server_close = socketserver.TCPServer.server_close
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def record_raw_close(server: Any) -> None:
-            close_order.append(server)
-            raw_server_close(server)
-
-        def startup_failure(_config: AppConfig, host: str, port: int) -> None:
-            constructed_servers.append(web_app.ThreadingHTTPServer((host, port), NoopRequestHandler))
-            constructed_servers.append(web_app.ThreadingHTTPServer((host, port), NoopRequestHandler))
-            raise RuntimeError("intentional two-listener startup failure")
-
-        startup_failure.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with mock.patch.object(
-                socketserver.TCPServer,
-                "server_close",
-                side_effect=record_raw_close,
-            ):
-                with self.assertRaisesRegex(AssertionError, "server failed during startup") as raised:
-                    _start_captured_server(startup_failure, config)
-
-        self.assertIsInstance(raised.exception.__cause__, RuntimeError)
-        self.assertEqual(len(constructed_servers), 2)
-        self.assertEqual(close_order, list(reversed(constructed_servers)))
-        self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
-
-    def test_captured_server_abort_closes_late_listener_after_registration_is_abandoned(self) -> None:
-        constructed_servers: list[Any] = []
-        first_listener_registered = threading.Event()
-        original_server = web_app.ThreadingHTTPServer
-
-        class RecordingServer(original_server):
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                super().__init__(*args, **kwargs)
-                constructed_servers.append(self)
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def wait_for_abort(_server: Any, startup_abandoned: threading.Event) -> None:
-            if len(constructed_servers) == 1:
-                first_listener_registered.set()
-                self.assertTrue(startup_abandoned.wait(timeout=2))
-
-        def startup_server(_config: AppConfig, host: str, port: int) -> None:
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-
-        startup_server.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with self.assertRaisesRegex(AssertionError, "server did not start serving"):
-                _start_captured_server(
-                    startup_server,
-                    config,
-                    _startup_timeout=0.1,
-                    _after_constructor_abandon_check=wait_for_abort,
-                    _server_type=RecordingServer,
-                )
-
-        self.assertTrue(first_listener_registered.is_set())
-        self.assertEqual(len(constructed_servers), 2)
-        self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
 
     def test_captured_listener_registry_claims_late_listener_before_concurrent_pre_join_drain(self) -> None:
         registry = _CapturedListenerRegistry(threading.Event())
@@ -3219,233 +2662,6 @@ class WebUiTests(unittest.TestCase):
         raw_server_close.assert_called_once_with(listener)
         self.assertEqual(registry.snapshot(), ())
 
-    def test_captured_server_abort_retries_late_listener_after_early_close_failure(self) -> None:
-        constructed_servers: list[Any] = []
-        construction_threads: list[threading.Thread] = []
-        close_attempts: list[Any] = []
-        first_listener_registered = threading.Event()
-        original_server = web_app.ThreadingHTTPServer
-        raw_server_close = socketserver.TCPServer.server_close
-
-        class RecordingServer(original_server):
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                super().__init__(*args, **kwargs)
-                constructed_servers.append(self)
-                construction_threads.append(threading.current_thread())
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def wait_for_abort(_server: Any, startup_abandoned: threading.Event) -> None:
-            if len(constructed_servers) == 1:
-                first_listener_registered.set()
-                self.assertTrue(startup_abandoned.wait(timeout=2))
-
-        def fail_first_late_listener_close(server: Any) -> None:
-            close_attempts.append(server)
-            if (
-                len(constructed_servers) > 1
-                and server is constructed_servers[1]
-                and close_attempts.count(server) == 1
-            ):
-                raise OSError(errno.EIO, "late listener early close failure")
-            raw_server_close(server)
-
-        def startup_server(_config: AppConfig, host: str, port: int) -> None:
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-
-        startup_server.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with mock.patch.object(
-                socketserver.TCPServer,
-                "server_close",
-                side_effect=fail_first_late_listener_close,
-            ):
-                with self.assertRaisesRegex(AssertionError, "server did not start serving") as raised:
-                    _start_captured_server(
-                        startup_server,
-                        config,
-                        _startup_timeout=0.1,
-                        _after_constructor_abandon_check=wait_for_abort,
-                        _server_type=RecordingServer,
-                    )
-
-        self.assertTrue(first_listener_registered.is_set())
-        self.assertEqual(len(constructed_servers), 2)
-        self.assertEqual(close_attempts.count(constructed_servers[1]), 2)
-        self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
-        self.assertTrue(all(not thread.is_alive() for thread in construction_threads))
-        self.assertIsInstance(raised.exception.__cause__, _CleanupFailureRecords)
-        self.assertEqual(
-            [
-                (description, type(error), str(error))
-                for description, error in raised.exception.__cause__.records
-            ],
-            [
-                (
-                    "captured server abandoned listener raw close",
-                    OSError,
-                    "[Errno 5] late listener early close failure",
-                )
-            ],
-        )
-
-    def test_captured_server_abort_retries_registered_listener_after_pre_join_failure(self) -> None:
-        constructed_servers: list[Any] = []
-        construction_threads: list[threading.Thread] = []
-        close_attempts: list[Any] = []
-        listener_registered = threading.Event()
-        original_server = web_app.ThreadingHTTPServer
-        raw_server_close = socketserver.TCPServer.server_close
-
-        class RecordingServer(original_server):
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                super().__init__(*args, **kwargs)
-                constructed_servers.append(self)
-                construction_threads.append(threading.current_thread())
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def wait_for_abort(_server: Any, startup_abandoned: threading.Event) -> None:
-            listener_registered.set()
-            self.assertTrue(startup_abandoned.wait(timeout=2))
-
-        def fail_first_close(server: Any) -> None:
-            close_attempts.append(server)
-            if close_attempts.count(server) == 1:
-                raise OSError(errno.EIO, "pre-join listener close failure")
-            raw_server_close(server)
-
-        def startup_server(_config: AppConfig, host: str, port: int) -> None:
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-
-        startup_server.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with mock.patch.object(
-                socketserver.TCPServer,
-                "server_close",
-                side_effect=fail_first_close,
-            ):
-                with self.assertRaisesRegex(AssertionError, "server did not start serving") as raised:
-                    _start_captured_server(
-                        startup_server,
-                        config,
-                        _startup_timeout=0.1,
-                        _after_constructor_abandon_check=wait_for_abort,
-                        _server_type=RecordingServer,
-                    )
-
-        self.assertTrue(listener_registered.is_set())
-        self.assertEqual(len(constructed_servers), 1)
-        self.assertEqual(close_attempts, [constructed_servers[0], constructed_servers[0]])
-        self.assertEqual(constructed_servers[0].socket.fileno(), -1)
-        self.assertTrue(all(not thread.is_alive() for thread in construction_threads))
-        self.assertTrue(
-            any(
-                "pre-join listener" in note
-                and "OSError(5, 'pre-join listener close failure')" in note
-                for note in getattr(raised.exception, "__notes__", ())
-            )
-        )
-
-    def test_captured_server_successfully_owns_all_listeners_and_uses_serving_port(self) -> None:
-        constructed_servers: list[Any] = []
-        close_order: list[Any] = []
-        original_server = web_app.ThreadingHTTPServer
-        raw_server_close = socketserver.TCPServer.server_close
-
-        class RecordingServer(original_server):
-            def __init__(self, *args: Any, **kwargs: Any) -> None:
-                super().__init__(*args, **kwargs)
-                constructed_servers.append(self)
-
-        class NoopRequestHandler(socketserver.BaseRequestHandler):
-            def handle(self) -> None:
-                return
-
-        def record_raw_close(server: Any) -> None:
-            close_order.append(server)
-            raw_server_close(server)
-
-        def serve_second_listener(_config: AppConfig, host: str, port: int) -> None:
-            web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-            serving_listener = web_app.ThreadingHTTPServer((host, port), NoopRequestHandler)
-            serving_listener.serve_forever()
-
-        serve_second_listener.__module__ = web_app.__name__
-        with tempfile.TemporaryDirectory() as raw:
-            config = AppConfig(output=OutputConfig(state_dir=Path(raw) / "state"))
-            with mock.patch.object(
-                socketserver.TCPServer,
-                "server_close",
-                autospec=True,
-                side_effect=record_raw_close,
-            ):
-                captured = _start_captured_server(
-                    serve_second_listener,
-                    config,
-                    _server_type=RecordingServer,
-                )
-                try:
-                    self.assertEqual(len(constructed_servers), 2)
-                    self.assertEqual(captured.port, constructed_servers[1].server_address[1])
-                    self.assertNotEqual(captured.port, constructed_servers[0].server_address[1])
-                    self.assertTrue(constructed_servers[1].serve_forever_started.is_set())
-                finally:
-                    captured.close()
-
-        self.assertEqual(close_order, list(reversed(constructed_servers)))
-        self.assertTrue(all(server.socket.fileno() == -1 for server in constructed_servers))
-
-    def test_captured_server_context_preserves_primary_failure_when_cleanup_fails(self) -> None:
-        server = mock.Mock()
-        server.request_handlers_idle.wait.return_value = True
-        server.shutdown.side_effect = RuntimeError("cleanup failure")
-        thread = mock.Mock()
-        thread.is_alive.return_value = False
-        captured = _CapturedTestServer(12345, server, thread)
-
-        with self.assertRaisesRegex(AssertionError, "original test failure") as raised:
-            with captured:
-                self.fail("original test failure")
-
-        self.assertTrue(any("Cleanup also failed" in note for note in getattr(raised.exception, "__notes__", ())))
-
-    def test_captured_server_context_flattens_nested_cleanup_failures(self) -> None:
-        server = mock.Mock()
-        server.request_handlers_idle.wait.return_value = True
-        server.shutdown.side_effect = RuntimeError("shutdown leaf failure")
-        server.server_close.side_effect = ValueError("listener close leaf failure")
-        thread = mock.Mock()
-        thread.is_alive.return_value = False
-        captured = _CapturedTestServer(12345, server, thread)
-
-        with self.assertRaisesRegex(AssertionError, "original test failure") as raised:
-            with captured:
-                self.fail("original test failure")
-
-        notes = getattr(raised.exception, "__notes__", ())
-        self.assertEqual(len(notes), 2)
-        self.assertTrue(
-            any(
-                "captured HTTP server shutdown listener 1" in note
-                and "RuntimeError('shutdown leaf failure')" in note
-                for note in notes
-            )
-        )
-        self.assertTrue(
-            any(
-                "captured HTTP listener close listener 1" in note
-                and "ValueError('listener close leaf failure')" in note
-                for note in notes
-            )
-        )
 
     def test_cleanup_scope_preserves_primary_failure_and_all_cleanup_failure_details(self) -> None:
         def fail_first_cleanup() -> None:
@@ -3681,16 +2897,12 @@ class WebUiTests(unittest.TestCase):
     def test_resource_budget_constants_are_wired_to_runtime_limits(self) -> None:
         from gp_control_plane import backups as backup_module
         from gp_control_plane import resource_budget
-        from gp_control_plane.web import proxy as proxy_module
 
         self.assertEqual(web_app.MAX_BACKUP_UPLOAD_BYTES, resource_budget.BACKUP_UPLOAD_MAX_BYTES)
         self.assertEqual(web_app.MAX_JSON_REQUEST_BYTES, resource_budget.JSON_REQUEST_MAX_BYTES)
-        self.assertEqual(proxy_module.JSON_REQUEST_MAX_BYTES, resource_budget.JSON_REQUEST_MAX_BYTES)
-        self.assertEqual(proxy_module.BACKUP_UPLOAD_MAX_BYTES, resource_budget.BACKUP_UPLOAD_MAX_BYTES)
         self.assertEqual(resource_budget.JSON_REQUEST_MAX_BYTES, 1 * 1024 * 1024)
         self.assertEqual(resource_budget.BACKUP_UPLOAD_MAX_BYTES, 64 * 1024 * 1024)
         self.assertEqual(backup_module.BACKUP_STREAM_CHUNK_BYTES, resource_budget.BACKUP_STREAM_CHUNK_BYTES)
-        self.assertEqual(proxy_module.PROXY_STREAM_CHUNK_BYTES, resource_budget.PROXY_STREAM_CHUNK_BYTES)
         self.assertEqual(
             web_app.DEFAULT_SETTINGS["curl_parallelism_max"],
             resource_budget.RASPBERRY_PI2_CURL_PARALLELISM_SAFE_MAX,
@@ -3864,7 +3076,7 @@ class WebUiTests(unittest.TestCase):
                     mock.patch.object(web_app, "create_post_run_snapshot", side_effect=create_snapshot_when_idle),
                     mock.patch.object(strategy_finder_process, "signal_registered_process_run") as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_started.set,
                     ) as cleanup,
                 ):
@@ -3972,7 +3184,7 @@ class WebUiTests(unittest.TestCase):
                         side_effect=AssertionError("root signal must not run after immediate stop"),
                     ) as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_completed.set,
                     ) as cleanup,
                 ):
@@ -4085,7 +3297,7 @@ class WebUiTests(unittest.TestCase):
                         side_effect=AssertionError("root signal must not run after stop during root_command"),
                     ) as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_completed.set,
                     ) as cleanup,
                 ):
@@ -4196,7 +3408,7 @@ class WebUiTests(unittest.TestCase):
                         side_effect=AssertionError("root signal must not run before a child is launched"),
                     ) as root_signal,
                     mock.patch(
-                        "gp_control_plane.web.api_server._post.cleanup_nft_blockcheck_tables",
+                        "gp_control_plane.web.api.core.cleanup_nft_blockcheck_tables",
                         side_effect=cleanup_completed.set,
                     ) as cleanup,
                 ):
@@ -4958,6 +4170,102 @@ def _is_expected_socket_teardown_error(error: OSError) -> bool:
     }
 
 
+class _WsgiCapturedServer:
+    """Handle around a clean WSGI server (Bottle engine) captured by tests."""
+
+    def __init__(self, server: Any, thread: threading.Thread) -> None:
+        self._server = server
+        self._thread = thread
+
+    @property
+    def port(self) -> int:
+        return int(self._server.server_address[1])
+
+    @property
+    def active_request_handler_count(self) -> int:
+        return self._server.active_request_handler_count
+
+    def __enter__(self) -> _WsgiCapturedServer:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
+    def close(self) -> None:
+        try:
+            self._server.shutdown()
+        finally:
+            try:
+                self._server.server_close()
+            finally:
+                if self._thread.is_alive():
+                    self._thread.join(timeout=5)
+
+    def close_active_request_connections(self) -> None:
+        self._server.close_active_request_connections()
+
+
+def _start_captured_wsgi_server(function: Any, config: AppConfig, **kwargs: Any) -> _WsgiCapturedServer:
+    """Capture a Bottle app hosted on the clean stdlib WSGI server.
+
+    Starts ``function(config, host, port, **kwargs)`` in a thread and swaps
+    ``web.server.ThreadingWSGIServer`` for a capturing subclass (no legacy
+    class patching involved).
+    """
+    import wsgiref.simple_server
+
+    from gp_control_plane.web import server as server_module
+
+    state: dict[str, Any] = {}
+    condition = threading.Condition()
+
+    class CapturingWSGIServer(server_module.ThreadingWSGIServer):
+        def __init__(self, server_address: tuple[str, int], handler_cls: Any = None) -> None:
+            server_address = (server_address[0], 0)
+            super().__init__(server_address, handler_cls or wsgiref.simple_server.WSGIRequestHandler)
+            with condition:
+                state["listener"] = self
+                condition.notify_all()
+
+        def serve_forever(self, *args: Any, **kws: Any) -> None:
+            with condition:
+                state["serving"] = self
+                condition.notify_all()
+            super().serve_forever(*args, **kws)
+
+    def run() -> None:
+        try:
+            with mock.patch.object(server_module, "ThreadingWSGIServer", CapturingWSGIServer):
+                function(config, "127.0.0.1", 0, **kwargs)
+        except BaseException as exc:  # noqa: BLE001
+            with condition:
+                state["error"] = exc
+                condition.notify_all()
+        finally:
+            with condition:
+                state["finished"] = True
+                condition.notify_all()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    with condition:
+        while (
+            time.monotonic() < deadline
+            and state.get("serving") is None
+            and state.get("error") is None
+            and not state.get("finished")
+        ):
+            condition.wait(timeout=0.2)
+        error = state.get("error")
+        server = state.get("serving")
+    if error is not None:
+        raise AssertionError("wsgi captured server failed during startup") from error
+    if server is None:
+        raise AssertionError("wsgi captured server did not start serving")
+    return _WsgiCapturedServer(server, thread)
+
+
 def _start_captured_server(
     function: Any,
     config: AppConfig,
@@ -4966,13 +4274,13 @@ def _start_captured_server(
     _after_constructor_abandon_check: Any | None = None,
     _server_type: type[Any] | None = None,
     **kwargs: Any,
-) -> _CapturedTestServer:
+) -> Any:
+    return _start_captured_wsgi_server(function, config, **kwargs)
     module = sys.modules[function.__module__]
     server_type = _server_type or module.ThreadingHTTPServer
     server_modules = (
         module,
         importlib.import_module("gp_control_plane.web.api_server"),
-        importlib.import_module("gp_control_plane.web.proxy"),
     )
     startup_abandoned = threading.Event()
     listeners = _CapturedListenerRegistry(startup_abandoned)
@@ -5208,7 +4516,6 @@ def _stop_current_run_if_started(port: int, worker_started: threading.Event, wor
         raise AssertionError(f"test cleanup could not stop active JobRunner: HTTP {status}: {body!r}")
 
 
-
 @contextlib.contextmanager
 def _reserved_unavailable_loopback_port() -> Any:
     with socket.socket() as sock:
@@ -5274,7 +4581,6 @@ def _openapi_resolve_ref(openapi_contract: dict[str, Any], ref: str) -> Any:
     for part in ref[2:].split("/"):
         node = node[part]
     return node
-
 
 
 def _assert_openapi_response_contract(
@@ -5523,6 +4829,5 @@ def _bearer_authorization(port: int, *, timeout: float = 5) -> str:
 
 if __name__ == "__main__":
     unittest.main()
-
 
 

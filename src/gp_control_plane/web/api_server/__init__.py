@@ -5,7 +5,7 @@ existing ``from gp_control_plane.web.api_server import X`` (and the
 ``gp_control_plane.web.app`` compatibility alias) keeps working unchanged.
 
 The request handler and serve() live across submodules:
-  _http/_get/_post/_events  — composed BaseHTTPRequestHandler mixins
+  _events/_pages/_payloads/_preferences — payload builders and helpers
   _payloads/_pages/_events  — payload/page/event builders
   _jobs/_preferences        — job workers + vault + run preferences
   _helpers/_errors          — leaf helpers + exceptions
@@ -17,11 +17,10 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
-import os
 import threading
 import time
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer  # noqa: F401 (legacy-test surface)
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -128,7 +127,6 @@ from gp_control_plane.web.api_server._errors import (
 from gp_control_plane.web.api_server._events import (
     _EVENT_CURSOR_LOCK,
     _EVENT_CURSOR_STATE,
-    EventsMixin,
     _core_event_payloads,
     _current_run_latest_log_payload,
     _event_cursor,
@@ -145,7 +143,6 @@ from gp_control_plane.web.api_server._events import (
     status_payload,
     web_event_changes,
 )
-from gp_control_plane.web.api_server._get import GetMixin
 from gp_control_plane.web.api_server._helpers import (
     _bounded_int,
     _clean_domain_list,
@@ -161,12 +158,6 @@ from gp_control_plane.web.api_server._helpers import (
     _query_int,
     _query_one,
     _query_str,
-)
-from gp_control_plane.web.api_server._http import (
-    MAX_BACKUP_UPLOAD_BYTES,
-    MAX_JSON_REQUEST_BYTES,
-    NDJSON_CONTENT_TYPE,
-    HttpMixin,
 )
 from gp_control_plane.web.api_server._jobs import (
     _clean_install_vault_create_response,
@@ -194,7 +185,6 @@ from gp_control_plane.web.api_server._payloads import (
     web_json_get_payload,
     web_json_post_response,
 )
-from gp_control_plane.web.api_server._post import PostMixin
 from gp_control_plane.web.api_server._preferences import (
     DEFAULT_DISCOVERY_PROFILES,
     DEFAULT_RUN_PREFERENCES,
@@ -208,7 +198,6 @@ from gp_control_plane.web.api_server._preferences import (
 )
 from gp_control_plane.web.api_server._server import (
     _ROOT_MANAGED_DISCOVERY_NAMES,
-    ApiHandler,
     _clear_stale_current_run,
     _recover_runtime_before_serve,
     _requires_verified_root_recovery,
@@ -221,6 +210,11 @@ from gp_control_plane.web.docs import (
     swagger_ui_html,
 )
 from gp_control_plane.web.errors import error_payload, normalize_error_payload
+from gp_control_plane.web.limits import (
+    MAX_BACKUP_UPLOAD_BYTES,
+    MAX_JSON_REQUEST_BYTES,
+    NDJSON_CONTENT_TYPE,
+)
 from gp_control_plane.web.routes import (
     JSON_GET_ROUTE_PATHS,
     JSON_HEAD_ROUTE_PATHS,
@@ -238,44 +232,15 @@ _core_strategy_discovery_job_payload = core_api.strategy_discovery_job_payload
 
 
 def serve(config: AppConfig, host: str, port: int, *, ui_enabled: bool = True) -> None:
-    engine = os.environ.get("GP_WEB_ENGINE", "legacy").strip().lower()
-    if engine != "legacy":
-        from gp_control_plane.web.bottle_server import serve_web_bottle
+    from gp_control_plane.web.bottle_server import serve_web_bottle
 
-        serve_web_bottle(config, host, port, ui_enabled=ui_enabled)
-        return
-
-    _recover_runtime_before_serve(config)
-    close_stale_running_runs(config.output.state_dir)
-    runner = JobRunner(config.output.state_dir, on_idle=lambda: create_post_run_snapshot(config.output.state_dir))
-    runtime_role = "monolith" if ui_enabled else "core"
-    web_install_enabled = True if ui_enabled else None
-
-    class Handler(ApiHandler):
-        pass
-
-    Handler.config = config
-    Handler.runner = runner
-    Handler.ui_enabled = ui_enabled
-    Handler.runtime_role = runtime_role
-    Handler.web_install_enabled = web_install_enabled
-
-    server = ThreadingHTTPServer((host, port), Handler)
-    mode = "web UI" if ui_enabled else "core API"
-    print(f"GP control plane {mode} listening on http://{host}:{port}")
-    server.serve_forever()
+    serve_web_bottle(config, host, port, ui_enabled=ui_enabled)
 
 
 def serve_core(config: AppConfig, host: str = "127.0.0.1", port: int = 8081) -> None:
     from ..core_server import serve_core as _serve_core
 
     _serve_core(config, host=host, port=port)
-
-
-def serve_web_proxy(config: AppConfig, host: str, port: int, *, core_url: str) -> None:
-    from ..proxy import serve_web_proxy as _serve_web_proxy
-
-    _serve_web_proxy(config, host=host, port=port, core_url=core_url)
 
 
 __all__ = [
@@ -298,21 +263,14 @@ __all__ = [
     '_EVENT_CURSOR_STATE',
     '_ROOT_MANAGED_DISCOVERY_NAMES',
     'Any',
-    'ApiHandler',
     'AppConfig',
     'AuthenticationError',
-    'BaseHTTPRequestHandler',
-    'EventsMixin',
-    'GetMixin',
     'HTTPStatus',
-    'HttpMixin',
     'JobRunner',
     'PasswordValidationError',
     'Path',
-    'PostMixin',
     'RequestBodyTooLarge',
     'RuntimeBusyError',
-    'ThreadingHTTPServer',
     '__version__',
     '_bounded_int',
     '_candidate_domain_index_payload',
@@ -442,7 +400,6 @@ __all__ = [
     'save_system_preset',
     'serve',
     'serve_core',
-    'serve_web_proxy',
     'service_api',
     'set_preset_domain_enabled',
     'snapshot_file_path',

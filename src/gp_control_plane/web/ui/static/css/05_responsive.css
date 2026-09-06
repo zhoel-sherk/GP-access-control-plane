@@ -1,0 +1,59 @@
+/* GP Control Plane — Responsive Mobile & Desktop UI Styles */
+
+button, input[type="button"], input[type="submit"], select, .segment-option,
+.subtab-button {
+  min-height: 44px;
+  touch-action: manipulation;
+}
+
+textarea, .line-numbered-textarea {
+  width: 100% !important;
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace !important;
+  font-size: 13px !important;
+  line-height: 1.4 !important;
+  box-sizing: border-box;
+}
+
+@media (max-width: 768px) {
+  .tabs, [role="tablist"], .candidate-tabs {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    scrollbar-width: thin;
+    padding-bottom: 4px;
+  }
+
+  .tabs .tab-button, .candidate-tabs .subtab-button {
+    flex: 0 0 auto;
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .layout, .finder-layout, .form-grid, .preset-grid, .protocol-grid {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+
+  .table-container, #candidates-table, #history-table, .table-wrap,
+  .run-diagnostic-table-wrap {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch !important;
+    width: 100% !important;
+    max-width: 100%;
+  }
+
+  .main, .panel, .stack, .code-editor {
+    max-width: 100%;
+  }
+
+  .run-actions button, .button-row button {
+    width: 100% !important;
+    margin-bottom: 8px;
+  }
+
+  .terminal-panel pre {
+    height: calc(100dvh - 260px);
+  }
+}

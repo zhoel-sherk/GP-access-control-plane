@@ -10,7 +10,7 @@
 # venv + установка пакета в editable + ВСЕ dev/test-инструменты
 bash scripts/dev-install.sh
 
-# JS/CSS-линтер (web/ui/parts — реальные .js/.css файлы)
+# JS/CSS-линтер (web/ui/static — реальные .js/.css файлы)
 npm install            # ставит @biomejs/biome
 ```
 
@@ -49,7 +49,7 @@ runtime-`requirements.txt` не существует.
 | `ruff` | выбранный набор: E4/E9, F, I, UP, B (см. pyproject `[tool.ruff.lint]`) | жёсткий |
 | `vulture` | мёртвый код (`[tool.vulture]`, paths=src) | жёсткий |
 | `pyright` | статик-тайп-чек (`pyrightconfig.json`) | **мягкий** (best-effort; не останавливает гейт) |
-| `biome` | lint/parse JS/CSS в `web/ui/parts` | жёсткий (если установлен) |
+| `biome` | lint/parse JS/CSS в `web/ui/static` | жёсткий (если установлен) |
 | `coverage` | покрытие по unit-набору, `fail_under = 70` | жёсткий |
 
 Замечания:
@@ -72,8 +72,12 @@ runtime-`requirements.txt` не существует.
   гвард `tests/test_src_line_limit.py` (маркер `quality`).
 - **Слои импортов**: `engine_common` не импортирует `bc2_engine`/`bs_engine`;
   движки импортируют `engine_common`. Проверяется import-smoke в гейте.
-- **JS/CSS не менять семантику**: правки в `web/ui/parts` не должны ломать
-  сборку страницы (guard-тесты `test_ui_parts.py`; sha страницы фиксирован).
+- **Лимит ассетов**: файлы `web/ui/static/**` (`.js`/`.css`/`.html`) ≤ 650 строк;
+  Python в `web/ui/**` ≤ 500 (guard `tests/test_ui_parts.py`, маркер `quality`).
+- **Прод без инлайна**: `GET /` — SPA-shell без inline `<style>`/`<script>`
+  (`Cache-Control: no-store`), ассеты `/static/*` c
+  `Cache-Control: public, max-age=31536000, immutable` (HTTP-гвард
+  `test_web_ui.py`). Ассеты редактируются напрямую, сборка не нужна.
 
 ## Как добавить тест
 
@@ -101,6 +105,5 @@ runtime-`requirements.txt` не существует.
 - `pyright` не установлен (офлайн): `pip install pyright` (см.
   requirements-dev.txt) или пропуск гейта (soft).
 - `biome` не установлен: `npm install`; без node — гейт пишет skip.
-- Страница «поехала» после правок JS/CSS: сравнить `sha256` собранной страницы
-  (`test_ui_parts`) и при необходимости перегенерировать части
-  `python dev/split_ui.py`.
+- Страница «поехала» после правок JS/CSS: правьте файлы в `web/ui/static/**`
+  напрямую; оболочка (`views/index.tpl`) подхватывает изменения без генерации.

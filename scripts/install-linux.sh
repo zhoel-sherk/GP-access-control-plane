@@ -110,19 +110,24 @@ EOF
 cat > /etc/systemd/system/gp-control-plane-web.service <<EOF
 [Unit]
 Description=GP Strategy Finder Web UI
-After=network-online.target gp-control-plane-core.service
+After=network-online.target
 [Service]
 User=$INSTALL_USER
 WorkingDirectory=$install_dir
 Environment=HOME=$target_home
 Environment=PATH=/usr/local/libexec/gp-control-plane:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EnvironmentFile=/etc/default/gp-control-plane-web
-ExecStart=$install_dir/.venv/bin/gp-control-plane web --host 0.0.0.0 --port 8080 --core-url http://127.0.0.1:8081
+ExecStart=$install_dir/.venv/bin/gp-control-plane web --host 0.0.0.0 --port 8080
 Restart=always
 [Install]
 WantedBy=multi-user.target
 EOF
 fi
-systemctl daemon-reload; systemctl enable --now gp-control-plane-core.service
-if [ "$INSTALL_WEB" = on ]; then systemctl enable --now gp-control-plane-web.service; fi
+systemctl daemon-reload
+if [ "$INSTALL_WEB" = on ]; then
+  systemctl disable --now gp-control-plane-core.service >/dev/null 2>&1 || true
+  systemctl enable --now gp-control-plane-web.service
+else
+  systemctl enable --now gp-control-plane-core.service
+fi
 printf '%s\n' 'status=success phase=fresh-install'

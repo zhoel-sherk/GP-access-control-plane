@@ -248,11 +248,23 @@ curl -LfsS "$GP_ZAPRET_INSTALLER_URL" | bash
 
 ### Структура web UI (`src/gp_control_plane/web/ui/`)
 
-Страница собирается серверно из маленьких статичных частей
-`web/ui/parts/**` (`.html`/`.css`/`.js`, каждая ≤500 строк) — порядок задан
-`parts/__init__.py::PART_ORDER`, сборка — `_assemble.index_html()` (кэш).
-Части **не отдаются как статические файлы** (единая инлайн-страница как
-раньше, байт-в-байт). Нарезка/перегенерация: `python dev/split_ui.py`.
+Фронтенд — внешние ассеты + серверная SPA-оболочка, без шага ручной сборки:
+
+- `static/css/**`, `static/js/**`, `static/html/**` — реальные файлы для
+  правки напрямую (агент/разработчик редактирует их без компиляции);
+  каждый `.js`/`.css`/`.html` не длиннее **650** физических строк.
+- `views/index.tpl` — SPA-shell на встроенном `SimpleTemplate`: подключает
+  стили `<link rel="stylesheet">` и скрипты `<script src="...">` в порядке
+  исходной нумерации, без инлайн `<style>`/`<script>`.
+- Отдача: `web.ui.index_html()` рендерит shell; ассеты раздаются по
+  `/static/<path>` через `bottle.static_file` с
+  `Cache-Control: public, max-age=31536000, immutable`; ссылки содержат
+  cache-busting `?v=<content-hash>`. Корень `/` отдаётся с `Cache-Control: no-store`.
+
+Один HTTP-стек на всех режимах: **Bottle-приложение на чистом WSGI**
+(`web/server.py`) для монолита (`gp-control-plane web`) и headless-core
+(`gp-control-plane core` = тот же `create_app(ui_enabled=False)`).
+Split-прокси и `--core-url` удалены.
 
 ### Структура кода и лимит размера
 

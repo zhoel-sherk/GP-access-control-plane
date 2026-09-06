@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from gp_control_plane.core_api._payloads import (
@@ -44,6 +45,7 @@ from ..storage import (
     delete_user_presets,
     read_custom_preset_index,
     read_custom_presets,
+    read_latest_run_payloads,
     read_strategy_pairs,
     read_system_preset_index,
     read_system_presets,
@@ -61,6 +63,7 @@ STRATEGY_DISCOVERY_START_RUN_KEYS = {
     "curl_parallelism",
     "timeout_seconds",
     "settings",
+    "resume_run_id",
 }
 
 STRATEGY_DISCOVERY_START_RUN_SETTINGS_KEYS = {
@@ -83,7 +86,65 @@ STRATEGY_DISCOVERY_START_RUN_SETTINGS_KEYS = {
     "repeats_mode",
     "bs_adaptive",
     "bs_pair_mode",
+    "bs_resume",
 }
+
+RESUMABLE_RUN_STATUSES = frozenset({"stopped", "timeout", "error"})
+
+
+def _latest_run_payload(state_dir: Path, run_id: str) -> dict[str, Any] | None:
+    for run in read_latest_run_payloads(state_dir, limit=500):
+        if str(run.get("id") or "") == str(run_id):
+            return run
+    return None
+
+
+def resume_discovery_request(state_dir: Path, resume_run_id: str) -> dict[str, Any]:
+    """Build a fresh start-run request that resumes a prior blockcheckS run.
+
+    Reconstructs the run parameters from the persisted run record so the
+    resumed ``bs scan|pair --resume`` reuses the SAME per-run database
+    (identified by the run id) and skips already-tested domain×strategy pairs.
+    """
+    run = _latest_run_payload(state_dir, resume_run_id)
+    if run is None:
+        raise ValueError(f"run to resume not found: {resume_run_id}")
+    if str(run.get("discovery_engine") or "") != "blockchecks":
+        raise ValueError("resume is supported only for blockcheckS (blockchecks engine) runs")
+    status = str(run.get("status") or "")
+    if status not in RESUMABLE_RUN_STATUSES:
+        raise ValueError(f"run is not resumable (status={status or 'unknown'})")
+    dopts = run.get("discovery_options") if isinstance(run.get("discovery_options"), dict) else {}
+    protocol = str(dopts.get("protocol") or "tls12")
+    kind = str(run.get("kind") or "standard-discovery")
+    mode = "multi_domain" if "multi-domain" in kind else "standard"
+    domains = list(run.get("domains") or [])
+    if not domains:
+        raise ValueError(f"run to resume has no domains recorded: {resume_run_id}")
+    settings: dict[str, Any] = {
+        "discovery_engine": "blockchecks",
+        "bs_resume": True,
+        "scan_level": str(dopts.get("scan_level") or "standard"),
+        "repeats": int(dopts.get("repeats") or 1),
+        "repeat_parallel": bool(dopts.get("repeat_parallel")),
+        "repeats_mode": str(dopts.get("repeats_mode") or "fast"),
+        "skip_dnscheck": bool(dopts.get("skip_dnscheck", True)),
+        "skip_ipblock": bool(dopts.get("skip_ipblock", True)),
+        "curl_max_time": int(dopts.get("curl_max_time") or 2),
+        "strategy_preset": str(dopts.get("strategy_preset") or ""),
+        "bs_adaptive": bool(dopts.get("adaptive", True)),
+        "bs_pair_mode": bool(dopts.get("pair_mode")),
+        "enable_tls12": protocol != "tls13",
+        "enable_tls13": protocol == "tls13",
+    }
+    return {
+        "mode": mode,
+        "domains": domains,
+        "timeout_seconds": int(run.get("timeout_seconds") or 0),
+        "settings": settings,
+        "resume_run_id": str(resume_run_id),
+    }
+
 
 def status_payload(config: AppConfig) -> dict[str, Any]:
     state = read_state(config.output.state_dir)
@@ -109,6 +170,7 @@ def status_payload(config: AppConfig) -> dict[str, Any]:
     if isinstance(state.get("last_snapshot"), dict):
         payload["last_snapshot"] = state["last_snapshot"]
     return payload
+
 
 def current_progress_payload(config: AppConfig) -> dict[str, Any]:
     state = read_state(config.output.state_dir)

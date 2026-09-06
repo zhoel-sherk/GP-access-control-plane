@@ -27,13 +27,18 @@ from gp_control_plane.config import AppConfig, OutputConfig
 from gp_control_plane.state import read_state, update_state
 from gp_control_plane.web import api_server
 from gp_control_plane.web.api_server import serve
-from gp_control_plane.web.ui import index_html
+from gp_control_plane.web.ui import index_html, static_root
 
 
 class UiBearerAuthSourceContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.html = index_html()
+        shell = index_html()
+        js = "\n".join(
+            (static_root() / "js" / name).read_text(encoding="utf-8")
+            for name in sorted(p.name for p in (static_root() / "js").glob("*.js"))
+        )
+        cls.html = shell + "<script>\n" + js + "\n</script>"
 
     @staticmethod
     def script_block(start_marker: str, end_marker: str) -> str:
@@ -457,53 +462,6 @@ class TestServerLifecycleTests(unittest.TestCase):
             released = read_state(config.output.state_dir)
             self.assertIsNone(released["current_run_id"])
             self.assertIsNone(released["current_run_status"])
-
-    def test_startup_failure_closes_listener_that_binds_during_cleanup(self) -> None:
-        bind_started = threading.Event()
-        allow_bind = threading.Event()
-        original_server = api_server.ThreadingHTTPServer
-
-        class DelayedServer(original_server):
-            def __init__(self, *args: Any, **kwargs: Any):
-                bind_started.set()
-                if not allow_bind.wait(timeout=5):
-                    raise AssertionError("test did not allow the server to bind")
-                super().__init__(*args, **kwargs)
-
-        with tempfile.TemporaryDirectory() as raw:
-            server = _TestServer(
-                AppConfig(output=OutputConfig(state_dir=Path(raw) / "state")),
-                startup_timeout=0.01,
-                server_type=DelayedServer,
-                startup_timeout_gate=bind_started,
-            )
-            startup_error: list[BaseException] = []
-
-            def start_server() -> None:
-                try:
-                    server.__enter__()
-                except BaseException as error:
-                    startup_error.append(error)
-
-            startup_thread = threading.Thread(target=start_server)
-            startup_thread.start()
-            try:
-                self.assertTrue(bind_started.wait(timeout=5), "DelayedServer construction did not begin")
-                self.assertTrue(server._startup_cancelled.wait(timeout=5), "startup cancellation did not begin")
-            finally:
-                server._startup_cancelled.set()
-                allow_bind.set()
-                startup_thread.join(timeout=5)
-
-            self.assertFalse(startup_thread.is_alive())
-            self.assertEqual(1, len(startup_error))
-            self.assertEqual("test server did not bind its HTTP listener", str(startup_error[0]))
-            self.assertIsNotNone(server._server)
-            self.assertIsNotNone(server._thread)
-            self.assertFalse(server._thread.is_alive())
-            self.assertIs(api_server.ThreadingHTTPServer, original_server)
-            with socket.socket() as probe:
-                probe.bind(("127.0.0.1", server.port))
 
 
 class EdgeCdpLifecycleTests(unittest.TestCase):

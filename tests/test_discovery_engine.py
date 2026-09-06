@@ -227,12 +227,108 @@ class DiscoveryEngineFlagMapTests(unittest.TestCase):
                 os.path.join("/tmp/xdg-state", "blockcheckS"),
             )
 
-    def test_bs_run_env_hands_off_zapret_root_without_xdg_override(self) -> None:
-        with mock.patch.dict(os.environ, {"ZAPRET_DIR": "/opt/zapret2"}, clear=False):
+    def test_bs_run_env_root_injects_fetch_off_and_nfqws2(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        nfq = root / "nfq2" / "nfqws2"
+        nfq.parent.mkdir(parents=True)
+        nfq.write_text("#!/bin/sh\n", encoding="utf-8")
+        nfq.chmod(nfq.stat().st_mode | stat.S_IEXEC)
+        with mock.patch.dict(os.environ, {"ZAPRET_DIR": str(root)}, clear=False):
             env = bs_run_env()
-        self.assertEqual("/opt/zapret2", env["BLOCKCHECKS_ZAPRET2"])
-        self.assertEqual("/opt/zapret2", env["ZAPRET2_ROOT"])
+        self.assertEqual(str(root), env["BLOCKCHECKS_ZAPRET2"])
+        self.assertEqual(str(root), env["ZAPRET2_ROOT"])
+        self.assertEqual("0", env["BLOCKCHECKS_FETCH_DEPS"])
+        self.assertEqual(str(nfq), env["BLOCKCHECKS_NFQWS2"])
         self.assertNotIn("BLOCKCHECKS_STATE_HOME", env)
+
+    def test_bs_run_env_binaries_layout_nfqws2(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        nfq = root / "binaries" / "linux-x86_64" / "nfqws2"
+        nfq.parent.mkdir(parents=True)
+        nfq.write_text("#!/bin/sh\n", encoding="utf-8")
+        nfq.chmod(nfq.stat().st_mode | stat.S_IEXEC)
+        with mock.patch.dict(os.environ, {"BLOCKCHECKS_ZAPRET2": str(root)}, clear=False):
+            env = bs_run_env()
+        self.assertEqual("0", env["BLOCKCHECKS_FETCH_DEPS"])
+        self.assertEqual(str(nfq), env["BLOCKCHECKS_NFQWS2"])
+
+    def test_bs_run_env_respects_existing_nfqws2_env(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        with mock.patch.dict(
+            os.environ,
+            {"BLOCKCHECKS_ZAPRET2": str(root), "BLOCKCHECKS_NFQWS2": "/custom/nfqws2"},
+            clear=False,
+        ):
+            env = bs_run_env()
+        self.assertEqual("/custom/nfqws2", env["BLOCKCHECKS_NFQWS2"])
+        self.assertEqual("0", env["BLOCKCHECKS_FETCH_DEPS"])
+
+    def test_stop_blockchecks_passes_bs_run_env(self) -> None:
+        import subprocess
+
+        root = Path(tempfile.mkdtemp())
+        (root / "nfq2").mkdir(parents=True)
+        (root / "nfq2" / "nfqws2").write_text("#!/bin/sh\n", encoding="utf-8")
+        calls: list[tuple[list[str], dict]] = []
+
+        def _run(argv, **kwargs):
+            calls.append((list(argv), kwargs))
+            return subprocess.CompletedProcess(argv, 0)
+
+        fake_bs = Path(tempfile.mkdtemp()) / "bs"
+        fake_bs.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_bs.chmod(fake_bs.stat().st_mode | stat.S_IEXEC)
+        with (
+            mock.patch("gp_control_plane.bs_engine._backend.subprocess.run", side_effect=_run),
+            mock.patch(
+                "gp_control_plane.bs_engine._backend.resolve_bs_binary", return_value=str(fake_bs)
+            ),
+            mock.patch.dict(os.environ, {"ZAPRET_DIR": str(root)}, clear=False),
+        ):
+            from gp_control_plane.bs_engine._backend import stop_blockchecks
+
+            stop_blockchecks()
+        self.assertEqual(len(calls), 1)
+        argv, kwargs = calls[0]
+        self.assertEqual([str(fake_bs), "stop", "--wait", "120"], argv)
+        self.assertEqual("0", kwargs["env"]["BLOCKCHECKS_FETCH_DEPS"])
+
+    def test_export_nfconf_passes_bs_run_env(self) -> None:
+        import subprocess
+
+        root = Path(tempfile.mkdtemp())
+        (root / "nfq2").mkdir(parents=True)
+        (root / "nfq2" / "nfqws2").write_text("#!/bin/sh\n", encoding="utf-8")
+        calls: list[tuple[list[str], dict]] = []
+
+        def _run(argv, **kwargs):
+            calls.append((list(argv), kwargs))
+            return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+        db = Path(tempfile.mkdtemp()) / "run.db"
+        db.write_text("", encoding="utf-8")
+        fake_bc = Path(tempfile.mkdtemp()) / "bc-nfconf"
+        fake_bc.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_bc.chmod(fake_bc.stat().st_mode | stat.S_IEXEC)
+        out = Path(tempfile.mkdtemp()) / "out"
+        with (
+            mock.patch("gp_control_plane.bs_engine._export.subprocess.run", side_effect=_run),
+            mock.patch(
+                "gp_control_plane.bs_engine._export.resolve_bc_nfconf", return_value=str(fake_bc)
+            ),
+            mock.patch(
+                "gp_control_plane.bs_engine._export._distinct_run_domains",
+                return_value=["x.example"],
+            ),
+            mock.patch.dict(os.environ, {"ZAPRET_DIR": str(root)}, clear=False),
+        ):
+            from gp_control_plane.bs_engine._export import export_nfconf
+
+            export_nfconf(out_dir=out, db=db)
+        self.assertEqual(len(calls), 1)
+        argv, kwargs = calls[0]
+        self.assertEqual(str(fake_bc), argv[0])
+        self.assertEqual("0", kwargs["env"]["BLOCKCHECKS_FETCH_DEPS"])
 
     def test_build_bs_scan_argv_accepts_db_and_strategy_preset(self) -> None:
         fake = Path(tempfile.mkdtemp()) / "bs"
@@ -255,6 +351,91 @@ class DiscoveryEngineFlagMapTests(unittest.TestCase):
         self.assertEqual("/tmp/run.db", argv[argv.index("--db") + 1])
         self.assertIn("-M", argv)
         self.assertEqual("gp-verified", argv[argv.index("-M") + 1])
+
+
+class BlockcheckResumeTests(unittest.TestCase):
+    def test_build_bs_scan_argv_adds_resume_flag(self) -> None:
+        fake = Path(tempfile.mkdtemp()) / "bs"
+        fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+        with mock.patch("gp_control_plane.discovery_engine.resolve_bs_binary", return_value=str(fake)):
+            argv = build_bs_scan_argv(
+                domains=["youtube.com"],
+                scan_level="standard",
+                repeats=1,
+                repeat_parallel=False,
+                curl_max_time=2,
+                timeout_seconds=0,
+                curl_parallelism=2,
+                skip_dnscheck=True,
+                db_path="/tmp/run.db",
+                resume=True,
+            )
+            argv_plain = build_bs_scan_argv(
+                domains=["youtube.com"],
+                scan_level="standard",
+                repeats=1,
+                repeat_parallel=False,
+                curl_max_time=2,
+                timeout_seconds=0,
+                curl_parallelism=2,
+                skip_dnscheck=True,
+                db_path="/tmp/run.db",
+                resume=False,
+            )
+        self.assertIn("--resume", argv)
+        self.assertNotIn("--resume", argv_plain)
+
+    def test_resume_discovery_request_rebuilds_run_params(self) -> None:
+        from gp_control_plane.storage import append_run
+
+        state = Path(tempfile.mkdtemp())
+        run_id = "a" * 32
+        run = {
+            "id": run_id,
+            "kind": "standard-discovery",
+            "discovery_engine": "blockchecks",
+            "status": "stopped",
+            "domains": ["discord.com", "youtube.com"],
+            "timeout_seconds": 0,
+            "discovery_options": {
+                "scan_level": "standard",
+                "repeats": 2,
+                "repeat_parallel": False,
+                "repeats_mode": "stable",
+                "skip_dnscheck": True,
+                "skip_ipblock": True,
+                "curl_max_time": 3,
+                "strategy_preset": "gp-verified",
+                "adaptive": True,
+                "protocol": "tls12",
+                "pair_mode": False,
+                "resume": False,
+            },
+        }
+        append_run(state, run)
+        req = core_api.resume_discovery_request(state, run_id)
+        self.assertEqual("standard", req["mode"])
+        self.assertEqual(["discord.com", "youtube.com"], req["domains"])
+        self.assertTrue(req["settings"]["bs_resume"])
+        self.assertEqual("gp-verified", req["settings"]["strategy_preset"])
+        self.assertEqual("stable", req["settings"]["repeats_mode"])
+        self.assertTrue(req["settings"]["enable_tls12"])
+
+        with self.assertRaises(ValueError):
+            core_api.resume_discovery_request(state, "f" * 32)
+        running = dict(run)
+        running["id"] = "b" * 32
+        running["status"] = "running"
+        append_run(state, running)
+        with self.assertRaises(ValueError):
+            core_api.resume_discovery_request(state, "b" * 32)
+        other_engine = dict(run)
+        other_engine["id"] = "c" * 32
+        other_engine["discovery_engine"] = "blockcheck2"
+        append_run(state, other_engine)
+        with self.assertRaises(ValueError):
+            core_api.resume_discovery_request(state, "c" * 32)
 
 
 if __name__ == "__main__":

@@ -79,22 +79,30 @@ class JobRunner:
         name: str,
         func: Callable[[threading.Event, str], Any],
         cancel_hook: Callable[[], Any] | None = None,
+        *,
+        run_id: str | None = None,
     ) -> Run:
         with self._lock:
             if str(read_state(self.state_dir).get("current_run_status") or "") == "quarantined":
                 raise RuntimeError("managed runtime recovery is required before starting a new run")
             if self._active_run_id:
                 raise RuntimeError(f"run already running: {self._active_run_id}")
-            run_id = uuid.uuid4().hex
+            if run_id:
+                if not (len(run_id) == 32 and all(c in "0123456789abcdef" for c in run_id)):
+                    raise ValueError("resume run_id must be a 32-char hex id")
+                used_run_id = run_id
+            else:
+                used_run_id = uuid.uuid4().hex
             cancel_event = _CancellationToken()
-            state_lock = _StateDirJobLock.acquire(self.state_dir, run_id, name)
-            self._active_run_id = run_id
+            state_lock = _StateDirJobLock.acquire(self.state_dir, used_run_id, name)
+            self._active_run_id = used_run_id
             self._active_run_name = name
             self._active_cancel = cancel_event
             self._active_cancel_hook = cancel_hook
             self._active_state_lock = state_lock
             self._active_quarantined = False
         created_at = now_iso()
+        run_id = used_run_id
         run = Run(run_id=run_id, name=name, status="queued", created_at=created_at)
         try:
             self._record(run_id, name, "queued", created_at)

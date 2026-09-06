@@ -365,7 +365,6 @@ pre {
   .status-grid, .button-row, .fill-row, .preset-grid, .settings-access-grid, .preset-actions, .domain-picker-row, .backup-downloads, .release-grid, .category-toolbar, .time-limit-row { grid-template-columns: 1fr; }
   .protocol-grid { grid-template-columns: 1fr; }
   .progress-grid { grid-template-columns: 1fr; }
-  .tabs { display: grid; grid-template-columns: 1fr; }
   .candidate-summary { white-space: normal; }
   .domain-header, .protocol-header { align-items: stretch; flex-direction: column; }
   h1 { font-size: 22px; }

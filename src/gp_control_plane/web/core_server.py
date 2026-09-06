@@ -4,6 +4,7 @@ from ..config import AppConfig
 
 
 def serve_core(config: AppConfig, host: str = "127.0.0.1", port: int = 8081) -> None:
-    from .api_server import serve
+    """Headless core mode: the same Bottle app with the UI disabled."""
+    from .bottle_server import serve_web_bottle
 
-    serve(config, host=host, port=port, ui_enabled=False)
+    serve_web_bottle(config, host=host, port=port, ui_enabled=False)
