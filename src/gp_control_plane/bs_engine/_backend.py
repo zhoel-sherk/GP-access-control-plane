@@ -46,12 +46,17 @@ def stop_blockchecks() -> None:
         bs = resolve_bs_binary()
     except RuntimeError:
         return
-    subprocess.run(
-        [bs, "stop", "--wait", "120"],
-        check=False,
-        timeout=60,
-        env=bs_run_env(),
-    )
+    try:
+        subprocess.run(
+            [bs, "stop", "--wait", "120"],
+            check=False,
+            timeout=60,
+            env=bs_run_env(),
+        )
+    except subprocess.TimeoutExpired:
+        # Graceful bs stop may hang while nfqws2 workers drain. Do not fail the
+        # run over it: the discovery loop SIGTERMs the child right afterwards.
+        log.warning("bs stop --wait timed out; discovery loop will SIGTERM the child")
 
 def run_blockchecks_discovery(
     domains: list[str],
@@ -260,6 +265,10 @@ def run_blockchecks_discovery(
             process.stdout.close()
         if domains_file_arg is not None:
             domains_file_arg.unlink(missing_ok=True)
+    # A user stop may race the read loop: `bs stop` can SIGTERM the child before
+    # the loop's own stop branch runs. Honour the stop request anyway.
+    if stop_event is not None and stop_event.is_set() and not stopped:
+        stopped = True
     _harvest_passes(state_dir, run_id, kind, harvested, run_db)
     if pair_mode and clean_domains:
         _harvest_udp(state_dir, run_id, kind, harvested, run_db, clean_domains[0])
