@@ -44,6 +44,7 @@ const API_ENDPOINTS = Object.freeze({
     status: '/api/core/status',
     startStrategyDiscoveryRun: '/api/core/strategy-discovery/start-run',
     preflight: '/api/core/strategy-discovery/preflight',
+    triage: '/api/core/strategy-discovery/triage',
     currentRunLatestLog: '/api/core/strategy-discovery/current-run-latest-log',
     exportNfconf: '/api/core/strategy-discovery/export-nfconf',
     stopCurrentStrategyDiscoveryRun: '/api/core/strategy-discovery/stop-current-run',
