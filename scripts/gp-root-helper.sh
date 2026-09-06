@@ -1867,6 +1867,51 @@ recover_quarantined_process_run() {
 
 require_root
 
+# Force-cleanup of host residue left by an aborted engine switch. Names are
+# strictly validated: only transient blockcheck nft probe tables and the
+# blockcheckS netns pool/shm owned by a previous run are ever touched.
+cleanup_nft_blockcheck_residue() {
+  nft list tables 2>/dev/null | while read -r kind family table; do
+    [ "$kind" = "table" ] || continue
+    digits=""
+    case "$table" in
+      blockcheck*_test) digits="${table#blockcheck}"; digits="${digits%_test}" ;;
+      blockcheck*) digits="${table#blockcheck}" ;;
+      *) continue ;;
+    esac
+    case "$digits" in
+      ''|*[!0-9]*) continue ;;
+    esac
+    case "$family" in
+      ip|ip6|inet|arp|bridge|netdev) nft delete table "$family" "$table" 2>/dev/null ;;
+    esac
+  done
+}
+
+is_bs_pool_netns() {
+  case "$1" in
+    bs-p-*) ;;
+    *) return 1 ;;
+  esac
+  rest="${1#bs-p-}"
+  case "$rest" in
+    ''|*[!0-9-]*) return 1 ;;
+  esac
+}
+
+cleanup_bs_pool_netns() {
+  ip -o netns list 2>/dev/null | awk '{print $1}' | while read -r ns; do
+    if is_bs_pool_netns "$ns"; then
+      ip netns del "$ns" 2>/dev/null
+    fi
+  done
+}
+
+cleanup_bs_shm() {
+  [ -d /dev/shm/blockchecks ] || return 0
+  find /dev/shm/blockchecks -mindepth 1 -maxdepth 1 -exec rm -rf -- {} + 2>/dev/null
+}
+
 command="${1:-}"
 [ -n "$command" ] || fail "command is required"
 shift
@@ -1964,13 +2009,34 @@ case "$command" in
       *) fail "unsupported nft family: $family" ;;
     esac
     case "$table" in
-      blockcheck*) table_digits="${table#blockcheck}" ;;
+      blockcheck*_test)
+        table_digits="${table#blockcheck}"
+        table_digits="${table_digits%_test}"
+        ;;
+      blockcheck*)
+        table_digits="${table#blockcheck}"
+        ;;
       *) fail "unsupported nft table: $table" ;;
     esac
     case "$table_digits" in
       ''|*[!0-9]*) fail "unsupported nft table: $table" ;;
     esac
     exec nft delete table "$family" "$table"
+    ;;
+  cleanup-residue)
+    engine="${1:-}"
+    case "$engine" in
+      blockcheck2|blockchecks) ;;
+      *) fail "unsupported cleanup engine: $engine" ;;
+    esac
+    cleanup_nft_blockcheck_residue
+    case "$engine" in
+      blockchecks)
+        cleanup_bs_pool_netns
+        cleanup_bs_shm
+        ;;
+    esac
+    exit 0
     ;;
   *)
     fail "unsupported command: $command"

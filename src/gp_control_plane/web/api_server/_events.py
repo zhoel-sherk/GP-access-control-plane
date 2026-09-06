@@ -62,6 +62,19 @@ def status_payload(config: AppConfig) -> dict[str, Any]:
             "state_dir": str(config.output.state_dir),
         },
         "zapret2": check_install_cached(),
+        "current_run": _current_run_from_state(state),
+    }
+
+
+def _current_run_from_state(state: Any) -> dict[str, str] | None:
+    if not isinstance(state, dict):
+        return None
+    run_id = str(state.get("current_run_id") or "").strip()
+    if not run_id:
+        return None
+    return {
+        "run_id": run_id,
+        "status": str(state.get("current_run_status") or "running"),
     }
 
 
@@ -73,7 +86,7 @@ def _web_event_payloads(config: AppConfig) -> dict[str, dict[str, Any]]:
     status = status_payload(config)
     status_event = {
         key: status[key]
-        for key in ("version", "state", "settings", "run_preferences", "paths", "zapret2")
+        for key in ("version", "state", "settings", "run_preferences", "paths", "zapret2", "current_run")
         if key in status
     }
     return {
