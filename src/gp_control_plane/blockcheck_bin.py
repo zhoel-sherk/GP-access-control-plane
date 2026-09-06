@@ -13,6 +13,7 @@ import shutil
 from pathlib import Path
 
 _BLOCKCHECK_NAMES = ("blockcheck2.sh", "blockcheck.sh")
+_NFQWS2_NAME = "nfqws2"
 
 
 def _is_executable(path: str | None) -> bool:
@@ -49,4 +50,29 @@ def resolve_blockcheck_binary() -> str | None:
     return None
 
 
-__all__ = ["resolve_blockcheck_binary"]
+def _nfqws2_candidates() -> list[str]:
+    root = Path.home()
+    return [
+        f"/usr/local/libexec/gp-control-plane/{_NFQWS2_NAME}",
+        f"/opt/zapret2/nfq2/{_NFQWS2_NAME}",
+        str(root / ".local" / "bin" / _NFQWS2_NAME),
+        f"/usr/local/bin/{_NFQWS2_NAME}",
+        f"/usr/bin/{_NFQWS2_NAME}",
+    ]
+
+
+def resolve_nfqws2_binary() -> str | None:
+    """Return an executable nfqws2 path, or None (independent of PATH)."""
+    env_path = os.environ.get("BLOCKCHECKS_NFQWS2") or os.environ.get("NFQWS2_PATH") or ""
+    if _is_executable(env_path.strip()):
+        return env_path.strip()
+    found = shutil.which(_NFQWS2_NAME)
+    if _is_executable(found):
+        return found
+    for candidate in _nfqws2_candidates():
+        if _is_executable(candidate):
+            return candidate
+    return None
+
+
+__all__ = ["resolve_blockcheck_binary", "resolve_nfqws2_binary"]

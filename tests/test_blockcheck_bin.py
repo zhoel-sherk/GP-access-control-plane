@@ -39,3 +39,30 @@ def test_fallback_includes_install_wrapper_dir():
     names = bb._fallback_candidates()
     assert "/usr/local/libexec/gp-control-plane/blockcheck2.sh" in names
     assert "/opt/zapret2/blockcheck2.sh" in names
+
+
+def test_nfqws2_which_wins(monkeypatch, tmp_path):
+    fake = _make_exec(tmp_path / "bin" / "nfqws2")
+    monkeypatch.setattr(bb.shutil, "which", lambda name: fake if name == "nfqws2" else None)
+    assert bb.resolve_nfqws2_binary() == fake
+
+
+def test_nfqws2_env_wins(monkeypatch, tmp_path):
+    fake = _make_exec(tmp_path / "custom" / "nfqws2")
+    monkeypatch.setattr(bb.shutil, "which", lambda name: None)
+    monkeypatch.setenv("BLOCKCHECKS_NFQWS2", fake)
+    assert bb.resolve_nfqws2_binary() == fake
+
+
+def test_nfqws2_opt_fallback_in_candidates():
+    names = bb._nfqws2_candidates()
+    assert "/opt/zapret2/nfq2/nfqws2" in names
+    assert "/usr/local/libexec/gp-control-plane/nfqws2" in names
+
+
+def test_nfqws2_none_when_absent(monkeypatch):
+    monkeypatch.setattr(bb.shutil, "which", lambda name: None)
+    monkeypatch.setattr(bb, "_is_executable", lambda path: False)
+    monkeypatch.delenv("BLOCKCHECKS_NFQWS2", raising=False)
+    monkeypatch.delenv("NFQWS2_PATH", raising=False)
+    assert bb.resolve_nfqws2_binary() is None
