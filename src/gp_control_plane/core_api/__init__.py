@@ -40,7 +40,7 @@ from ..engine_common import (
     read_runs_page,
     read_strategy_candidates_filtered,
 )
-from ..state import now_iso, read_state
+from ..state import current_run_from_state, now_iso, read_state
 from ..storage import (
     delete_user_presets,
     read_custom_preset_index,
@@ -164,9 +164,8 @@ def status_payload(config: AppConfig) -> dict[str, Any]:
             "state_dir": str(config.output.state_dir),
         },
         "updated_at": now_iso(),
+        "current_run": current_run_from_state(state),
     }
-    if current_run_id:
-        payload["current_run"] = {"run_id": current_run_id, "status": current_status or "running"}
     if isinstance(state.get("last_snapshot"), dict):
         payload["last_snapshot"] = state["last_snapshot"]
     return payload

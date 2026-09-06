@@ -16,7 +16,7 @@ from gp_control_plane.engine_common import (
     read_runs,
 )
 from gp_control_plane.settings import read_run_settings, read_settings
-from gp_control_plane.state import now_iso, read_state
+from gp_control_plane.state import current_run_from_state, now_iso, read_state
 from gp_control_plane.storage import (
     read_custom_preset_index,
     read_system_preset_index,
@@ -62,20 +62,11 @@ def status_payload(config: AppConfig) -> dict[str, Any]:
             "state_dir": str(config.output.state_dir),
         },
         "zapret2": check_install_cached(),
-        "current_run": _current_run_from_state(state),
+        "current_run": current_run_from_state(state),
     }
 
 
-def _current_run_from_state(state: Any) -> dict[str, str] | None:
-    if not isinstance(state, dict):
-        return None
-    run_id = str(state.get("current_run_id") or "").strip()
-    if not run_id:
-        return None
-    return {
-        "run_id": run_id,
-        "status": str(state.get("current_run_status") or "running"),
-    }
+
 
 
 def _event_payloads(config: AppConfig) -> dict[str, dict[str, Any]]:

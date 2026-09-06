@@ -349,7 +349,8 @@ function mergeLogPayload(previous, next){
 function mergeStatusPayload(status){
   if (!status) return false;
   const previousSettings = JSON.stringify(state.settings || {});
-  state.status = status;
+  const previous = state.status || {};
+  state.status = { ...previous, ...status };
   if (status.candidate_version) syncCandidateVersion(status.candidate_version);
   if (status.settings) state.settings = status.settings;
   if (status.run_preferences) state.runPreferences = status.run_preferences;
@@ -377,6 +378,8 @@ async function refreshRuns(reset = true){
   }
 }
 async function refreshLog(incremental = false){
+  if (logRefreshInFlight) return;
+  logRefreshInFlight = true;
   try {
     const previous = state.finderLog;
     const payload = await getJson(latestLogUrl(incremental));
@@ -386,7 +389,13 @@ async function refreshLog(incremental = false){
     renderLog();
     renderMetrics();
   } catch (error) {
-    setMessage(`Ошибка обновления лога: ${error.message}`, 'bad');
+    const now = Date.now();
+    if (now >= logErrorSuppressedUntil) {
+      setMessage(`Ошибка обновления лога: ${error.message}`, 'bad');
+      logErrorSuppressedUntil = now + 10000;
+    }
+  } finally {
+    logRefreshInFlight = false;
   }
 }
 async function refreshPresets(){

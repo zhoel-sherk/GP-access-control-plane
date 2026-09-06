@@ -48,6 +48,24 @@ def read_state(state_dir: Path) -> dict[str, Any]:
     return state
 
 
+def current_run_from_state(state: Any) -> dict[str, str] | None:
+    """Canonical ``current_run`` view shared by every status producer.
+
+    Both the compact core status and the web SSE status payload build this
+    exact object so the UI never has to reconcile two different shapes.
+    """
+    if not isinstance(state, dict):
+        return None
+    run_id = str(state.get("current_run_id") or "").strip()
+    if not run_id:
+        return None
+    return {
+        "run_id": run_id,
+        "status": str(state.get("current_run_status") or "running"),
+    }
+
+
+
 def write_state(state_dir: Path, state: dict[str, Any]) -> None:
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / "state.json"

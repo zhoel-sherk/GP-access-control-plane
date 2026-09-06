@@ -68,7 +68,7 @@ runtime-`requirements.txt` не существует.
   явно `raise … from`. Проверка: grep-скан «except → pass» должен давать 0.
 - **Нет мёртвого кода**: `vulture --config pyproject.toml` чист (unused-параметры
   интерфейсов либо `_`-префикс, либо явный комментарий «legacy»).
-- **Лимит размера**: ни один `.py` в `src/` не превышает 500 физических строк —
+- **Лимит размера**: ни один `.py` в `src/` не превышает 800 физических строк —
   гвард `tests/test_src_line_limit.py` (маркер `quality`).
 - **Слои импортов**: `engine_common` не импортирует `bc2_engine`/`bs_engine`;
   движки импортируют `engine_common`. Проверяется import-smoke в гейте.

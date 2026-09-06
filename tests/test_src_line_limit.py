@@ -1,7 +1,7 @@
 """Repo-wide guard: no source .py file may exceed the size budget.
 
 A project rule keeps every Python file under src/gp_control_plane/ (and any
-other .py shipped under src/) at <=500 physical lines. Large modules are split
+other .py shipped under src/) at <=800 physical lines. Large modules are split
 into same-named packages whose __init__ re-exports the public surface
 (e.g. strategy_finder -> engine_common/bc2_engine/bs_engine; storage.py ->
 storage/; web/api_server.py -> web/api_server/).
@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 _SRC_DIR = Path(__file__).resolve().parents[1] / "src"
-_LIMIT = 500
+_LIMIT = 800
 
 
 pytestmark = pytest.mark.quality

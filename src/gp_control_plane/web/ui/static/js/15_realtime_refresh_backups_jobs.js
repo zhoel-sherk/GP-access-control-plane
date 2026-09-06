@@ -10,6 +10,7 @@ function handleLogEvent(){
 }
 function handleStatusEvent(payload){
   mergeStatusPayload(payload);
+  syncBusyLogWatchdog();
 }
 function parseSseEvent(frame){
   let event = 'message';
@@ -96,6 +97,31 @@ function startRealtimeEvents(options){
   const controller = new AbortController();
   realtimeSource = controller;
   connectRealtimeEvents(controller);
+  startLightRefresh();
+}
+function syncBusyLogWatchdog(){
+  const wanted = isBusy();
+  if (wanted && !busyLogWatchdogTimer) {
+    busyLogWatchdogTimer = setInterval(() => {
+      if (!isBusy()) {
+        syncBusyLogWatchdog();
+        return;
+      }
+      if (logRefreshInFlight) return;
+      const log = state.finderLog;
+      const last = (log && log.received_at_ms) || 0;
+      if (logDirty || Date.now() - last > 5000) refreshLog(true);
+    }, 3000);
+  } else if (!wanted && busyLogWatchdogTimer) {
+    clearInterval(busyLogWatchdogTimer);
+    busyLogWatchdogTimer = null;
+  }
+}
+function startLightRefresh(){
+  if (lightRefreshTimer) return;
+  lightRefreshTimer = setInterval(() => {
+    refresh({ light: true, silent: true });
+  }, 20000);
 }
 function startRealtimeFallback(){
   if (realtimeFallbackTimer) clearInterval(realtimeFallbackTimer);

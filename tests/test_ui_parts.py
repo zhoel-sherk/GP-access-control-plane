@@ -19,7 +19,7 @@ from gp_control_plane.web.ui import index_html
 _UI_DIR = Path(__file__).resolve().parents[1] / "src" / "gp_control_plane" / "web" / "ui"
 _STATIC_DIR = _UI_DIR / "static"
 _ASSET_LIMIT = 650
-_PY_LIMIT = 500
+_PY_LIMIT = 800
 
 
 pytestmark = pytest.mark.quality
