@@ -6,9 +6,19 @@
         <div class="subtitle">GP Control Plane · локальная web panel · Linux host</div>
       </div>
       <div class="topbar-badges">
+        <div class="segmented-control topbar-engine" id="topbar-discovery-engine" role="radiogroup" aria-label="Движок подбора">
+          <label class="segment-option">
+            <input type="radio" name="topbar-discovery-engine" value="blockcheck2" checked>
+            blockcheck2
+          </label>
+          <label class="segment-option">
+            <input type="radio" name="topbar-discovery-engine" value="blockchecks">
+            blockcheckS
+          </label>
+        </div>
         <span class="topbar-version" id="app-version-badge">v-</span>
-      </div>
         <button class="secondary" data-action="logout" type="button">Выйти</button>
+      </div>
     </div>
   </header>
   <main class="main">

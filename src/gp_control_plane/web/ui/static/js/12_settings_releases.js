@@ -50,10 +50,7 @@ function renderSettings(){
   const runCurlMaxTimeQuic = el('run-curl-max-time-quic');
   const runCurlMaxTimeDoh = el('run-curl-max-time-doh');
   if (ipv6) ipv6.checked = Boolean(settings.enable_ipv6);
-  const engineSelect = el('settings-discovery-engine');
-  if (engineSelect) engineSelect.value = settings.discovery_engine || 'blockcheck2';
-  const finderEngine = el('finder-discovery-engine');
-  if (finderEngine && !state.settingsTouched) finderEngine.value = settings.discovery_engine || 'blockcheck2';
+  setTopbarDiscoveryEngine(settings.discovery_engine || 'blockcheck2');
   const bsPreset = el('bs-strategy-preset');
   if (bsPreset) bsPreset.value = settings.strategy_preset || '';
   const bsRepMode = el('bs-repeats-mode');
@@ -130,7 +127,7 @@ function currentSettingsFromForm(){
   const timeouts = runTimeoutSettings();
   return {
     enable_ipv6: Boolean(el('settings-enable-ipv6')?.checked),
-    discovery_engine: el('settings-discovery-engine')?.value || selectedDiscoveryEngine(),
+    discovery_engine: selectedDiscoveryEngine(),
     debug_stdout: Boolean(el('settings-debug-stdout')?.checked),
     curl_parallelism_max: Number(el('settings-curl-max')?.value || 10),
     curl_parallelism_default: Number(current.curl_parallelism_default || 4),
