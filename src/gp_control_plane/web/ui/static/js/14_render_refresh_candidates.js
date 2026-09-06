@@ -39,6 +39,27 @@ function renderCandidatesOnly(){
   renderCandidates();
   updateEditorLineNumbers('common-domains');
 }
+function appendLogNote(line){
+  const logNode = el('finder-log');
+  if (!logNode) return;
+  const base = logNode.textContent === 'Лога пока нет' ? '' : logNode.textContent || '';
+  logNode.textContent = base ? `${base}\n${line}` : line;
+  scrollLogToBottom();
+  const raw = document.querySelector('.raw-log-panel');
+  if (raw) raw.open = true;
+}
+function hasDnsPinForDomain(domain){
+  const target = String(domain || '').trim().toLowerCase();
+  if (!target) return false;
+  const providers = Array.isArray(state.bsDnsPinsData) ? state.bsDnsPinsData : [];
+  for (const provider of providers) {
+    for (const line of (provider.lines || [])) {
+      const tokens = String(line).split(/\s+/).filter(Boolean);
+      if (tokens.some((token) => token.toLowerCase() === target)) return true;
+    }
+  }
+  return false;
+}
 async function refreshBsDnsPins(force = false){
   const now = Date.now();
   if (!force && state.bsDnsPinsAt && now - state.bsDnsPinsAt < 20000) return;
@@ -48,19 +69,28 @@ async function refreshBsDnsPins(force = false){
   try {
     const data = await getJson(apiUrl('web', 'bsDnsPins'));
     const providers = Array.isArray(data.providers) ? data.providers : [];
-    if (!providers.length) {
-      box.textContent = 'Файлов hosts пока нет — нужен запуск blockcheckS с DNS/DoH-пинами (domain→IP против hijack).';
-      return;
-    }
+    state.bsDnsPinsData = providers;
     const NL = String.fromCharCode(10);
-    const parts = [];
-    for (const provider of providers) {
-      parts.push(`# ${provider.provider} - ${provider.path}
+    let text;
+    if (!providers.length) {
+      text = 'Файлов hosts пока нет — нужен запуск blockcheckS с DNS/DoH-пинами (domain→IP против hijack).';
+    } else {
+      const parts = [];
+      for (const provider of providers) {
+        parts.push(`# ${provider.provider} - ${provider.path}
 ${(provider.lines || []).join(NL)}`);
+      }
+      text = parts.join(NL + NL);
     }
-    box.textContent = parts.join(String.fromCharCode(10, 10));
+    const previous = state.bsDnsPinsPrev;
+    state.bsDnsPinsPrev = text;
+    box.textContent = text;
+    if (previous !== null && previous !== text && providers.length) {
+      setMessage('Новые записи в DNS — смотри «Списки и профили»', 'good');
+    }
   } catch (error) {
     box.textContent = `Не удалось загрузить DNS-pins: ${error.message}`;
+    appendLogNote(`DNS-pins: не удалось загрузить (${error.message})`);
   }
 }
 async function refreshStrategyPairs(force = false){

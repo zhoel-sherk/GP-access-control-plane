@@ -127,6 +127,7 @@ function setActiveTab(tabName){
   if (tabName === 'lists') {
     if (!state.v2flyCategories) loadV2flyCategories();
     loadPresetEditorFromSelection({ silent: true });
+    refreshBsDnsPins(true);
   }
   if (tabName === 'settings') {
     if (!mutatingBlocked() && !state.releaseChecked && !state.releaseChecking) checkReleases({ silent: true });

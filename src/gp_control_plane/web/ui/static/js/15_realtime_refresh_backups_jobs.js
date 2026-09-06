@@ -411,11 +411,20 @@ async function runTriageNow(){
         const raw = document.querySelector('.raw-log-panel');
         if (raw) raw.open = true;
       }
+      await refreshBsDnsPins(true);
+      const tri = (data && data.triage) || {};
+      if (tri.dns_hijacked && !hasDnsPinForDomain(target)) {
+        appendLogNote(`DNS-запись для этого домена не доступна: ${target}`);
+        setMessage(`DNS-запись для этого домена не доступна: ${target}`, 'warn');
+      }
     } else {
-      setMessage(`Triage ${target} ошибка: ${(data && data.message) || 'неизвестный сбой'}`, 'bad');
+      const msg = (data && data.message) || 'неизвестный сбой';
+      setMessage(`Triage ${target} ошибка: ${msg}`, 'bad');
+      appendLogNote(`Triage ${target} ошибка: ${msg}`);
     }
   } catch (error) {
     setMessage(`Triage ошибка: ${error.message}`, 'bad');
+    appendLogNote(`Triage ошибка: ${error.message}`);
   }
 }
 function coreStrategyDiscoveryPayload(mode, domains, options, timeout){
