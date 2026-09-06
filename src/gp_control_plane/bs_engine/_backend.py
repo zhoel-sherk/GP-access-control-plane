@@ -46,7 +46,12 @@ def stop_blockchecks() -> None:
         bs = resolve_bs_binary()
     except RuntimeError:
         return
-    subprocess.run([bs, "stop", "--wait", "120"], check=False, timeout=60)
+    subprocess.run(
+        [bs, "stop", "--wait", "120"],
+        check=False,
+        timeout=60,
+        env=bs_run_env(),
+    )
 
 def run_blockchecks_discovery(
     domains: list[str],

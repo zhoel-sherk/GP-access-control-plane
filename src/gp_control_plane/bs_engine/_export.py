@@ -8,7 +8,11 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from gp_control_plane.discovery_engine import blockchecks_state_dir, resolve_bc_nfconf
+from gp_control_plane.discovery_engine import (
+    blockchecks_state_dir,
+    bs_run_env,
+    resolve_bc_nfconf,
+)
 
 
 def _default_export_out_dir() -> Path:
@@ -71,6 +75,7 @@ def export_nfconf(
             capture_output=True,
             text=True,
             timeout=120,
+            env=bs_run_env(),
         )
         if completed.returncode != 0:
             raise RuntimeError(

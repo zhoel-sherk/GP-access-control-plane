@@ -104,22 +104,56 @@ def blockchecks_state_dir() -> Path:
     return root / "blockcheckS"
 
 
+def _zapret_root_from_env() -> str | None:
+    """Zapret2 root requested by the user (ZAPRET_DIR wins over BS envs)."""
+    raw = (
+        (os.environ.get("ZAPRET_DIR") or "").strip()
+        or (os.environ.get("BLOCKCHECKS_ZAPRET2") or "").strip()
+        or (os.environ.get("ZAPRET2_ROOT") or "").strip()
+    )
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    return str(path) if path.is_dir() else None
+
+
+def _find_nfqws2_in_root(root: str) -> str | None:
+    """nfqws2 under a zapret root: legacy nfq2/ layout or new binaries/<arch>/."""
+    p = Path(root)
+    nfq2 = p / "nfq2" / "nfqws2"
+    if nfq2.is_file():
+        return str(nfq2)
+    for candidate in sorted(p.glob("binaries/*/nfqws2")):
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
 def bs_run_env() -> dict[str, str]:
     """Child env for `bs` subprocesses: inherit + zapret handoff.
 
     XDG is intentionally NOT overridden here: GP runs `bs` as the same user
-    and relies on the shared run.lock in the default XDG state dir. Only the
-    zapret tree location is propagated (when GP knows it via ZAPRET_DIR /
-    BLOCKCHECKS_ZAPRET2) so blobs/lua/nfqws2 resolve consistently.
+    and relies on the shared run.lock in the default XDG state dir.
+
+    A zapret2 root (env ``ZAPRET_DIR``/``BLOCKCHECKS_ZAPRET2``/``ZAPRET2_ROOT``,
+    falling back to ``/opt/zapret2``) is treated as authoritative: GP pins
+    ``BLOCKCHECKS_ZAPRET2``/``ZAPRET2_ROOT``, resolves ``BLOCKCHECKS_NFQWS2``
+    from both the legacy ``nfq2/nfqws2`` and the ``binaries/<arch>/nfqws2``
+    layouts, and sets ``BLOCKCHECKS_FETCH_DEPS=0`` so blockcheckS never
+    auto-downloads a SECOND zapret2 tree. When no root is configured/found,
+    nothing is pinned and bs keeps its default (auto-fetch on first run).
     """
     env = dict(os.environ)
-    zapret = (env.get("ZAPRET_DIR") or env.get("BLOCKCHECKS_ZAPRET2") or "").strip()
-    if zapret:
-        env.setdefault("BLOCKCHECKS_ZAPRET2", zapret)
-        env.setdefault("ZAPRET2_ROOT", zapret)
+    root = _zapret_root_from_env()
+    if root is None and Path("/opt/zapret2").is_dir():
+        root = "/opt/zapret2"
+    if root:
+        env.setdefault("BLOCKCHECKS_ZAPRET2", root)
+        env["ZAPRET2_ROOT"] = root
+        env["BLOCKCHECKS_FETCH_DEPS"] = "0"
         if not env.get("BLOCKCHECKS_NFQWS2"):
-            nfq = Path(zapret) / "nfq2" / "nfqws2"
-            if nfq.is_file():
+            nfq = _find_nfqws2_in_root(root)
+            if nfq:
                 env["BLOCKCHECKS_NFQWS2"] = str(nfq)
     return env
 
