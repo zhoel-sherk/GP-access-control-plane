@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,8 @@ from gp_control_plane.discovery_engine import (
     normalize_engine,
 )
 from gp_control_plane.settings import read_run_settings, save_run_settings
-from gp_control_plane.state import read_state
+from gp_control_plane.state import now_iso, read_state
+from gp_control_plane.storage import append_run
 from gp_control_plane.web.api import HandlerContext, register_get, register_post
 from gp_control_plane.web.api_server._errors import RuntimeBusyError
 from gp_control_plane.web.api_server._events import (
@@ -65,7 +67,40 @@ def core_preflight(ctx: HandlerContext) -> dict[str, Any]:
 
 @register_get("/api/core/strategy-discovery/triage")
 def core_triage(ctx: HandlerContext) -> dict[str, Any]:
-    return bs_triage_domain(_query_one(_ctx_query(ctx), "domain"))
+    domain = _query_one(_ctx_query(ctx), "domain")
+    result = bs_triage_domain(domain)
+    _record_triage(ctx.config.output.state_dir, domain, result)
+    return result
+
+
+def _record_triage(state_dir: Path, domain: str, result: dict[str, Any]) -> None:
+    """Persist a triage check into the runs history (kind='triage')."""
+    try:
+        ts = now_iso()
+        triage = result.get("triage") if isinstance(result.get("triage"), dict) else {}
+        phase = (triage.get("domain_phases") or {}).get(domain) or triage.get(
+            "handshake_phase"
+        ) or ""
+        append_run(
+            state_dir,
+            {
+                "id": uuid.uuid4().hex,
+                "kind": "triage",
+                "status": "success" if str(result.get("status") or "") == "ok" else "error",
+                "timestamp": ts,
+                "started_at": ts,
+                "completed_at": ts,
+                "domains": [str(domain or "")] if domain else [],
+                "discovery_engine": "blockchecks",
+                "phase": "triage",
+                "domain": str(domain or ""),
+                "provider": str(result.get("provider") or ""),
+                "phase_summary": str(phase or ""),
+                "message": str(result.get("message") or result.get("output") or ""),
+            },
+        )
+    except Exception:  # noqa: BLE001 — history must never break triage itself
+        return
 
 
 @register_get("/api/core/presets/domain-lists")

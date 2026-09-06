@@ -135,7 +135,10 @@ function setActiveTab(tabName){
   }
 }
 function latestRun(){
-  return state.finderRuns.length ? state.finderRuns[state.finderRuns.length - 1] : null;
+  // Triage checks are recorded into history but are not discovery runs: the
+  // "repeat last run" action must never replay one as a strategy discovery.
+  const runs = (state.finderRuns || []).filter((row) => String(row.kind || '') !== 'triage');
+  return runs.length ? runs[runs.length - 1] : null;
 }
 function currentRun(){
   const run = (state.status || {}).current_run;
