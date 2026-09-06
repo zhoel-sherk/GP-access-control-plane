@@ -1892,6 +1892,7 @@ pktws_check_https_tls12()
             state_dir = tmp / "state"
             blockcheck = tmp / "blockcheck2.sh"
             blockcheck.write_text("#!/bin/sh\n\nfsleep_setup\necho real\n", encoding="utf-8")
+            blockcheck.chmod(0o755)
             captured: dict[str, object] = {}
             root_calls: list[tuple[list[str], dict[str, object]]] = []
 
@@ -1904,7 +1905,7 @@ pktws_check_https_tls12()
                 return command
 
             with (
-                patch("gp_control_plane.bc2_engine._runner.shutil.which", return_value=str(blockcheck)),
+                patch("gp_control_plane.blockcheck_bin.shutil.which", return_value=str(blockcheck)),
                 patch("gp_control_plane.bc2_engine._process.root_command", side_effect=fake_root_command),
                 patch(
                     "gp_control_plane.bc2_engine._runner._run_blockcheck_command_live",

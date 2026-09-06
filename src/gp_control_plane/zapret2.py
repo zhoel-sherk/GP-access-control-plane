@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 
+from .blockcheck_bin import resolve_blockcheck_binary
 from .process_registry import validate_run_id
 
 DEFAULT_ROOT_HELPER = "/usr/local/libexec/gp-control-plane/gp-root-helper"
@@ -55,7 +56,7 @@ _INSTALL_CHECK_LOCK = threading.Lock()
 log = logging.getLogger(__name__)
 def check_install() -> dict[str, object]:
     nfqws2 = shutil.which("nfqws2")
-    blockcheck = shutil.which("blockcheck2.sh") or shutil.which("blockcheck.sh")
+    blockcheck = resolve_blockcheck_binary()
     nft = shutil.which("nft")
     curl = shutil.which("curl")
     helper = root_helper_status()

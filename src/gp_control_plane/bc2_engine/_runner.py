@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 import threading
 from pathlib import Path
 from typing import Any
@@ -16,6 +15,7 @@ from gp_control_plane.bc2_engine._process import (
 )
 from gp_control_plane.bc2_engine._recorder import _LiveStdoutRecorder
 from gp_control_plane.bc2_engine._writers import _set_debug_stdout_env, _stdout_log_mode
+from gp_control_plane.blockcheck_bin import resolve_blockcheck_binary
 from gp_control_plane.engine_common._constants import PHASE_CHECK_VPN, PHASE_COMPLETE
 from gp_control_plane.engine_common._options import (
     DiscoveryOptions,
@@ -44,7 +44,7 @@ def _run_blockcheck_live(
     stop_event: threading.Event | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    blockcheck = shutil.which("blockcheck2.sh") or shutil.which("blockcheck.sh")
+    blockcheck = resolve_blockcheck_binary()
     if not blockcheck:
         raise RuntimeError("blockcheck2.sh/blockcheck.sh not found in PATH")
     options = options.normalized()
@@ -197,7 +197,7 @@ def _run_multidomain_blockcheck_live(
     stop_event: threading.Event | None = None,
     run_id: str | None = None,
 ) -> dict[str, Any]:
-    blockcheck = shutil.which("blockcheck2.sh") or shutil.which("blockcheck.sh")
+    blockcheck = resolve_blockcheck_binary()
     if not blockcheck:
         raise RuntimeError("blockcheck2.sh/blockcheck.sh not found in PATH")
     options = options.normalized()
