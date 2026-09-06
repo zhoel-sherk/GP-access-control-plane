@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from gp_control_plane.storage import (
     read_custom_preset_index,
     read_system_preset_index,
 )
+from gp_control_plane.storage._errors import StorageUnavailableError
 from gp_control_plane.web.api_server._helpers import (
     _bounded_int,
     _query_one,
@@ -75,51 +77,107 @@ def _event_payloads(config: AppConfig) -> dict[str, dict[str, Any]]:
 
 
 def _web_event_payloads(config: AppConfig) -> dict[str, dict[str, Any]]:
-    status = status_payload(config)
-    status_event = {
+    state_dir = config.output.state_dir
+    return {
+        "status": _web_status_event(config),
+        "runs": _safe_event_builder(lambda: _runs_event_payload(state_dir), {"count": 0, "version": ""}),
+        "log": _safe_event_builder(
+            lambda: _log_event_payload(state_dir),
+            {"run_id": None, "status": None, "stdout": {"size": 0, "mtime_ns": 0}},
+        ),
+        "candidates": _safe_event_builder(
+            lambda: {"version": candidate_storage_version(state_dir)},
+            {"version": {}},
+        ),
+        "settings": _safe_event_builder(
+            lambda: {"version": _event_fingerprint(_settings_snapshot(config))},
+            {"version": ""},
+        ),
+        "presets": _safe_event_builder(
+            lambda: {
+                "version": _event_fingerprint(
+                    {
+                        "custom": read_custom_preset_index(state_dir),
+                        "system": read_system_preset_index(state_dir),
+                    }
+                )
+            },
+            {"version": ""},
+        ),
+    }
+
+
+def _settings_snapshot(config: AppConfig) -> dict[str, Any]:
+    return status_payload(config).get("settings") or {}
+
+
+def _web_status_event(config: AppConfig) -> dict[str, Any]:
+    try:
+        status = status_payload(config)
+    except StorageUnavailableError:
+        state = read_state(config.output.state_dir)
+        settings = state.get("settings") if isinstance(state.get("settings"), dict) else {}
+        return {
+            "version": __version__,
+            "state": state,
+            "settings": settings,
+            "current_run": current_run_from_state(state),
+        }
+    return {
         key: status[key]
         for key in ("version", "state", "settings", "run_preferences", "paths", "zapret2", "current_run")
         if key in status
     }
-    return {
-        "status": status_event,
-        "runs": _runs_event_payload(config.output.state_dir),
-        "log": _log_event_payload(config.output.state_dir),
-        "candidates": {"version": status.get("candidate_version") or {}},
-        "settings": {"version": _event_fingerprint(status.get("settings") or {})},
-        "presets": {
-            "version": _event_fingerprint(
-                {
-                    "custom": read_custom_preset_index(config.output.state_dir),
-                    "system": read_system_preset_index(config.output.state_dir),
-                }
-            )
-        },
-    }
+
+
+def _safe_event_builder(builder: Callable[[], Any], fallback: Any) -> Any:
+    try:
+        return builder()
+    except StorageUnavailableError:
+        return fallback
 
 
 def _core_event_payloads(config: AppConfig) -> dict[str, dict[str, Any]]:
     state_dir = config.output.state_dir
-    status_event = dict(core_api.status_payload(config))
-    status_event.pop("updated_at", None)
-    run_settings_event = {"version": _event_fingerprint(read_run_settings(config))}
-    domain_lists_event = {
-        "version": _event_fingerprint(
-            {
-                "custom": read_custom_preset_index(state_dir),
-                "system": read_system_preset_index(state_dir),
-            }
-        )
-    }
-    candidates_event = {"version": candidate_storage_version(state_dir)}
     return {
-        "core.status": status_event,
-        "strategy-discovery.progress": core_api.current_progress_payload(config),
-        "strategy-discovery.log": _log_event_payload(state_dir),
-        "strategy-candidates": candidates_event,
-        "run-settings": run_settings_event,
-        "domain-lists": domain_lists_event,
+        "core.status": _safe_event_builder(
+            lambda: _without_key(core_api.status_payload(config), "updated_at"),
+            {"state": "unknown", "current_run": current_run_from_state(read_state(state_dir))},
+        ),
+        "strategy-discovery.progress": _safe_event_builder(
+            lambda: core_api.current_progress_payload(config),
+            {},
+        ),
+        "strategy-discovery.log": _safe_event_builder(
+            lambda: _log_event_payload(state_dir),
+            {"run_id": None, "status": None, "stdout": {"size": 0, "mtime_ns": 0}},
+        ),
+        "strategy-candidates": _safe_event_builder(
+            lambda: {"version": candidate_storage_version(state_dir)},
+            {"version": {}},
+        ),
+        "run-settings": _safe_event_builder(
+            lambda: {"version": _event_fingerprint(read_run_settings(config))},
+            {"version": ""},
+        ),
+        "domain-lists": _safe_event_builder(
+            lambda: {
+                "version": _event_fingerprint(
+                    {
+                        "custom": read_custom_preset_index(state_dir),
+                        "system": read_system_preset_index(state_dir),
+                    }
+                )
+            },
+            {"version": ""},
+        ),
     }
+
+
+def _without_key(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    payload = dict(payload)
+    payload.pop(key, None)
+    return payload
 
 
 def _runs_event_payload(state_dir: Path) -> dict[str, Any]:

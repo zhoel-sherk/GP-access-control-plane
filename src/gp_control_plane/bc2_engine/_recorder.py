@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -47,6 +48,7 @@ from gp_control_plane.engine_common._stdout_parse import (
 from gp_control_plane.engine_common._upsert import candidate_id_for
 from gp_control_plane.state import append_jsonl, now_iso
 from gp_control_plane.storage import connect, upsert_candidate_event_conn
+from gp_control_plane.storage._errors import StorageUnavailableError
 
 
 class _LiveStdoutRecorder:
@@ -416,8 +418,11 @@ class _LiveStdoutRecorder:
         self._candidate_writer.start()
 
     def _candidate_writer_loop(self) -> None:
+        _WRITER_BUSY_TIMEOUT_MS = 60_000
+        _CHECKPOINT_EVERY = 50
+        checkpoint_count = 0
         try:
-            with connect(self._state_dir) as conn:
+            with connect(self._state_dir, busy_timeout_ms=_WRITER_BUSY_TIMEOUT_MS) as conn:
                 while True:
                     item = self._candidate_writer_queue.get()
                     if item is _CANDIDATE_WRITER_STOP:
@@ -425,8 +430,31 @@ class _LiveStdoutRecorder:
                     events = item
                     if not isinstance(events, list):
                         continue
-                    for event in events:
-                        upsert_candidate_event_conn(conn, **event)
-                    conn.commit()
+                    self._flush_batch_with_retry(conn, events)
+                    checkpoint_count += 1
+                    if checkpoint_count >= _CHECKPOINT_EVERY:
+                        checkpoint_count = 0
+                        try:
+                            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                        except sqlite3.OperationalError:
+                            pass
         except BaseException as exc:  # pragma: no cover - covered through close()
             self._candidate_writer_error = exc
+
+    def _flush_batch_with_retry(self, conn: sqlite3.Connection, events: list[Any]) -> None:
+        for attempt in range(3):
+            try:
+                for event in events:
+                    upsert_candidate_event_conn(conn, **event)
+                conn.commit()
+                return
+            except StorageUnavailableError:
+                try:
+                    conn.rollback()
+                except sqlite3.OperationalError:
+                    pass
+                if attempt >= 2:
+                    raise
+                time.sleep(0.2 * (attempt + 1))
+            except sqlite3.OperationalError:
+                raise
