@@ -74,6 +74,10 @@ class JobRunner:
         self._active_state_lock: _StateDirJobLock | None = None
         self._active_quarantined = False
 
+    def is_active(self) -> bool:
+        with self._lock:
+            return self._active_run_id is not None
+
     def start(
         self,
         name: str,

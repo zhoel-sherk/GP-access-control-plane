@@ -194,6 +194,10 @@ def core_stop_run(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
 
 @register_post("/api/core/strategy-discovery/start-run", error_status=409, value_error_status=400)
 def core_start_run(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
+    if ctx.runner.is_active():
+        raise RuntimeBusyError(
+            "another discovery run is still active or finalizing; wait until it finishes before starting a new run"
+        )
     payload = dict(ctx.body or {})
     resume_run_id = str(payload.get("resume_run_id") or "").strip()
     incoming = dict(payload)
