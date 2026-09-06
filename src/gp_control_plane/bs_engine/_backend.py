@@ -79,6 +79,7 @@ def run_blockchecks_discovery(
     repeats_mode: str = "fast",
     adaptive: bool = True,
     pair_mode: bool = False,
+    resume: bool = False,
 ) -> dict[str, Any]:
     del enable_http, enable_ipv6, curl_max_time_quic, curl_max_time_doh, include_quic
     protocol = "tls13" if bool(enable_tls13) and not bool(enable_tls12) else "tls12"
@@ -94,6 +95,11 @@ def run_blockchecks_discovery(
     bs_runs = bs_state / "bs-runs"
     bs_runs.mkdir(parents=True, exist_ok=True)
     run_db = bs_runs / f"{run_id}.db"
+    if resume and not run_db.is_file():
+        raise ValueError(
+            f"resume requested but run database not found: {run_db} "
+            "(start a fresh run instead)"
+        )
     domains_file_arg: Path | None = None
     if len(clean_domains) > DOMAIN_ARGV_THRESHOLD:
         domains_file_arg = Path(state_dir) / f"bs-domains-{run_id}.txt"
@@ -116,6 +122,7 @@ def run_blockchecks_discovery(
         skip_ipblock=skip_ipblock,
         domains_file=domains_file_arg,
         pair_mode=pair_mode,
+        resume=resume,
     )
     logs = _finder_dir(state_dir) / "logs"
     logs.mkdir(parents=True, exist_ok=True)
@@ -155,6 +162,7 @@ def run_blockchecks_discovery(
             "adaptive": adaptive,
             "protocol": protocol,
             "pair_mode": pair_mode,
+            "resume": bool(resume),
         },
     }
     append_run(state_dir, started)

@@ -37,9 +37,27 @@ function renderRunCard(row){
     ${runDomains(row, domainKey)}
     ${runDiagnostics(row)}
     <div class="run-card-actions">
+      ${runResumable(row) ? `<button class="secondary" data-run-resume="${esc(row.run_id || '')}" type="button">Продолжить</button>` : ''}
       <button class="secondary" data-run-repeat="${esc(domainKey)}" type="button">Повторить с этими настройками</button>
     </div>
   </article>`;
+}
+function runResumable(row){
+  if (!row || String(row.discovery_engine || '') !== 'blockchecks') return false;
+  return ['stopped', 'timeout', 'error'].includes(String(row.status || ''));
+}
+async function resumeRun(runId){
+  const id = String(runId || '').trim();
+  if (!id) {
+    showToast('Не указан запуск для продолжения', 'warn');
+    return;
+  }
+  if (!requireNoActiveRun()) return;
+  await startJob(
+    apiEndpoint('core', 'startStrategyDiscoveryRun'),
+    { resume_run_id: id },
+    'Продолжение подбора'
+  );
 }
 function runDomainKey(row){
   return String(row.run_id || `${row.timestamp || ''}:${(row.domains || []).join('|')}`);

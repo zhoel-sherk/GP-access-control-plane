@@ -212,6 +212,7 @@ def build_bs_scan_argv(
     skip_ipblock: bool = False,
     domains_file: str | Path | None = None,
     pair_mode: bool = False,
+    resume: bool = False,
 ) -> list[str]:
     argv = [
         resolve_bs_binary(),
@@ -227,6 +228,8 @@ def build_bs_scan_argv(
         "--parallel",
         str(max(1, min(4, int(curl_parallelism)))),
     ]
+    if resume:
+        argv.append("--resume")
     if repeat_parallel:
         argv.append("--parallel-repeats")
     if str(repeats_mode).lower() == "stable":

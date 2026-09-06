@@ -37,10 +37,14 @@ const button = event.target.closest('button');
     logout();
     return;
   }
-  const protectedMutation = MUTATING_ACTIONS.has(action) || Boolean(button.dataset.backupRestore) || Boolean(button.dataset.backupDelete) || Boolean(button.dataset.cleanInstallVaultRestore);
+  const protectedMutation = MUTATING_ACTIONS.has(action) || Boolean(button.dataset.backupRestore) || Boolean(button.dataset.backupDelete) || Boolean(button.dataset.cleanInstallVaultRestore) || Boolean(button.dataset.runResume);
   if (protectedMutation && !requireNoActiveRun()) return;
   if (button.dataset.commonDomainSuggestion) {
     chooseCommonDomainSuggestion(button.dataset.commonDomainSuggestion);
+    return;
+  }
+  if (button.dataset.runResume) {
+    resumeRun(button.dataset.runResume);
     return;
   }
   if (button.dataset.runRepeat) {

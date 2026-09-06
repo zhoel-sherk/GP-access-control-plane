@@ -156,18 +156,29 @@ def core_stop_run(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
 @register_post("/api/core/strategy-discovery/start-run", error_status=409, value_error_status=400)
 def core_start_run(ctx: HandlerContext) -> tuple[dict[str, Any], int]:
     payload = dict(ctx.body or {})
+    resume_run_id = str(payload.get("resume_run_id") or "").strip()
     incoming = dict(payload)
     raw_settings = incoming.get("settings")
     nested = dict(raw_settings) if isinstance(raw_settings, dict) else {}
     if "discovery_engine" not in nested:
         nested["discovery_engine"] = read_run_settings(ctx.config).get("discovery_engine")
         incoming["settings"] = nested
+    resume_run_id_override: str | None = None
+    if resume_run_id:
+        # Resume = re-run the SAME blockcheckS run (reuse its per-run db):
+        # parameters are rebuilt server-side from the persisted run record.
+        if not (
+            len(resume_run_id) == 32 and all(c in "0123456789abcdef" for c in resume_run_id)
+        ):
+            raise ValueError("resume_run_id must be a 32-char hex id")
+        incoming = core_api.resume_discovery_request(ctx.config.output.state_dir, resume_run_id)
+        resume_run_id_override = resume_run_id
     name, core_payload = core_api.strategy_discovery_job_payload(incoming)
     if is_blockchecks_job(name) and campaign_lock_busy_message():
         raise RuntimeBusyError()
     func = lambda stop, run_id: _job_discovery(ctx.config, name, core_payload, stop, run_id)
     cancel_hook = stop_blockchecks if is_blockchecks_job(name) else cleanup_nft_blockcheck_tables
-    job = ctx.runner.start(name, func, cancel_hook=cancel_hook)
+    job = ctx.runner.start(name, func, cancel_hook=cancel_hook, run_id=resume_run_id_override)
     return core_api.run_accepted_payload(job), 202
 
 
