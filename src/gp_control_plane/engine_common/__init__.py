@@ -7,6 +7,7 @@ target the concrete submodules (``_store``, ``_models``, ...) directly.
 from gp_control_plane.engine_common._logtail import (
     classify_stderr_diagnostics,
     latest_log_tail,
+    latest_log_tail_for_run,
     parse_blockcheck_stdout,
 )
 from gp_control_plane.engine_common._options import (
@@ -43,6 +44,7 @@ __all__ = [
     "domain_sets",
     "iter_strategy_candidates_filtered",
     "latest_log_tail",
+    "latest_log_tail_for_run",
     "parse_blockcheck_stdout",
     "read_candidate_domain_index",
     "read_candidate_page",

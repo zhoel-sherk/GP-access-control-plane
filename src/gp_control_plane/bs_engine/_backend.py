@@ -30,6 +30,7 @@ from gp_control_plane.engine_common._options import (
 )
 from gp_control_plane.engine_common._retention import _cleanup_old_strategy_logs, _finder_dir
 from gp_control_plane.engine_common._runmeta import _discovery_run_id
+from gp_control_plane.runtime import enrich_active_run
 from gp_control_plane.state import now_iso
 from gp_control_plane.storage import append_run
 
@@ -171,6 +172,23 @@ def run_blockchecks_discovery(
         },
     }
     append_run(state_dir, started)
+    try:
+        enrich_active_run(
+            state_dir,
+            run_id=run_id,
+            engine="blockchecks",
+            kind=str(started.get("kind") or kind),
+            domains=list(clean_domains),
+            phase=str(started.get("phase") or PHASE_DISCOVERY),
+            started_at=str(started.get("started_at") or ""),
+            log_paths={
+                "stdout_log": str(stdout_log),
+                "stderr_log": str(stderr_log),
+                "progress_log": str(progress_log),
+            },
+        )
+    except Exception:  # noqa: BLE001 — runtime mirror must never break the run
+        log.warning("runtime enrich failed", exc_info=True)
     process_started = time.monotonic()
     progress_state = {
         "attempt_total": 0,

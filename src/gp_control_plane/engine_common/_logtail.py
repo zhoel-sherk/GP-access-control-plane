@@ -37,51 +37,16 @@ def latest_log_tail(
     for run in reversed(read_runs(state_dir, limit=200)):
         if requested_run_id is not None and str(run.get("id") or "") != requested_run_id:
             continue
-        stdout_log = Path(str(run.get("stdout_log") or ""))
-        if not stdout_log.is_file():
-            continue
-        stderr_log_raw = str(run.get("stderr_log") or "")
-        stderr_log = Path(stderr_log_raw) if stderr_log_raw else None
-        stdout_delta = _log_delta(stdout_log, stdout_log_match, stdout_from_size)
-        stderr_delta = _log_delta(stderr_log, stderr_log_match, stderr_from_size) if stderr_log and stderr_log.is_file() else None
-        if stdout_delta is None:
-            stdout_tail = "\n".join(_tail_lines(stdout_log, max_lines))
-            stdout_append = ""
-        else:
-            stdout_tail = ""
-            stdout_append = stdout_delta
-        if stderr_delta is None:
-            stderr_tail = "\n".join(_tail_lines(stderr_log, max_lines)) if stderr_log and stderr_log.is_file() else ""
-            stderr_append = ""
-        else:
-            stderr_tail = ""
-            stderr_append = stderr_delta
-        stderr_diagnostics = classify_stderr_diagnostics("\n".join(part for part in (stderr_tail, stderr_append) if part))
-        progress = run.get("progress")
-        if not isinstance(progress, dict):
-            progress = _read_progress_log(run)
-        if not isinstance(progress, dict):
-            if not stdout_tail:
-                stdout_tail = "\n".join(_tail_lines(stdout_log, max_lines))
-            progress = progress_from_stdout(stdout_tail, run)
-            progress["partial"] = True
-        return {
-            "run_id": run.get("id"),
-            "kind": run.get("kind"),
-            "status": run.get("status"),
-            "stdout_tail": stdout_tail,
-            "stdout_append": stdout_append,
-            "stderr_tail": stderr_tail,
-            "stderr_append": stderr_append,
-            "stderr_diagnostics": stderr_diagnostics,
-            "stdout_log": str(stdout_log),
-            "stderr_log": str(stderr_log) if stderr_log else "",
-            "stdout_size": _file_version(stdout_log)["size"],
-            "stderr_size": _file_version(stderr_log)["size"] if stderr_log and stderr_log.is_file() else 0,
-            "progress": progress,
-            "metrics": _read_latest_metrics(run),
-            "run_settings": _run_settings_for_progress(run),
-        }
+        payload = latest_log_tail_for_run(
+            run,
+            max_lines=max_lines,
+            stdout_from_size=stdout_from_size,
+            stdout_log_match=stdout_log_match,
+            stderr_from_size=stderr_from_size,
+            stderr_log_match=stderr_log_match,
+        )
+        if payload is not None:
+            return payload
     return {
         "run_id": requested_run_id,
         "kind": None,
@@ -96,6 +61,68 @@ def latest_log_tail(
         "progress": {} if requested_run_id is not None else progress_from_stdout("", {}),
         "metrics": {},
         "run_settings": {},
+    }
+
+
+def latest_log_tail_for_run(
+    run: dict[str, Any],
+    *,
+    max_lines: int = 200,
+    stdout_from_size: int | None = None,
+    stdout_log_match: str | None = None,
+    stderr_from_size: int | None = None,
+    stderr_log_match: str | None = None,
+) -> dict[str, Any] | None:
+    """Tail a single run record (runtime.json-backed or from SQLite history).
+
+    Returns None when the run has no stdout log file yet; callers decide how to
+    represent that (e.g. an empty active-run payload).
+    """
+    from gp_control_plane.bc2_engine._progress import progress_from_stdout
+    stdout_log = Path(str(run.get("stdout_log") or ""))
+    if not stdout_log.is_file():
+        return None
+    stderr_log_raw = str(run.get("stderr_log") or "")
+    stderr_log = Path(stderr_log_raw) if stderr_log_raw else None
+    stdout_delta = _log_delta(stdout_log, stdout_log_match, stdout_from_size)
+    stderr_delta = _log_delta(stderr_log, stderr_log_match, stderr_from_size) if stderr_log and stderr_log.is_file() else None
+    if stdout_delta is None:
+        stdout_tail = "\n".join(_tail_lines(stdout_log, max_lines))
+        stdout_append = ""
+    else:
+        stdout_tail = ""
+        stdout_append = stdout_delta
+    if stderr_delta is None:
+        stderr_tail = "\n".join(_tail_lines(stderr_log, max_lines)) if stderr_log and stderr_log.is_file() else ""
+        stderr_append = ""
+    else:
+        stderr_tail = ""
+        stderr_append = stderr_delta
+    stderr_diagnostics = classify_stderr_diagnostics("\n".join(part for part in (stderr_tail, stderr_append) if part))
+    progress = run.get("progress")
+    if not isinstance(progress, dict):
+        progress = _read_progress_log(run)
+    if not isinstance(progress, dict):
+        if not stdout_tail:
+            stdout_tail = "\n".join(_tail_lines(stdout_log, max_lines))
+        progress = progress_from_stdout(stdout_tail, run)
+        progress["partial"] = True
+    return {
+        "run_id": run.get("id"),
+        "kind": run.get("kind"),
+        "status": run.get("status"),
+        "stdout_tail": stdout_tail,
+        "stdout_append": stdout_append,
+        "stderr_tail": stderr_tail,
+        "stderr_append": stderr_append,
+        "stderr_diagnostics": stderr_diagnostics,
+        "stdout_log": str(stdout_log),
+        "stderr_log": str(stderr_log) if stderr_log else "",
+        "stdout_size": _file_version(stdout_log)["size"],
+        "stderr_size": _file_version(stderr_log)["size"] if stderr_log and stderr_log.is_file() else 0,
+        "progress": progress,
+        "metrics": _read_latest_metrics(run),
+        "run_settings": _run_settings_for_progress(run),
     }
 
 def classify_stderr_diagnostics(stderr_text: str) -> list[dict[str, str]]:
@@ -127,7 +154,7 @@ def classify_stderr_diagnostics(stderr_text: str) -> list[dict[str, str]]:
     return diagnostics
 
 def _run_settings_for_progress(run: dict[str, Any]) -> dict[str, Any]:
-    options = run.get("discovery_options") if isinstance(run.get("discovery_options"), dict) else {}
+    options: Any = run.get("discovery_options") if isinstance(run.get("discovery_options"), dict) else {}
 
     def option_value(key: str, fallback_keys: tuple[str, ...] = (), default: Any = None) -> Any:
         if key in options:

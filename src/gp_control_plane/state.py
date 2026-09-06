@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -8,6 +9,10 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from .runtime import sync_runtime_from_state
+
+log = logging.getLogger(__name__)
 
 REMOVED_STATE_KEYS = {
     "last_sync_at",
@@ -93,6 +98,10 @@ def update_state(state_dir: Path, updater: Callable[[dict[str, Any]], dict[str, 
         updated = updater(dict(state))
         next_state = state if updated is None else updated
         write_state(state_dir, next_state)
+        try:
+            sync_runtime_from_state(state_dir, next_state)
+        except Exception:  # noqa: BLE001 — runtime mirror must never break state writes
+            log.warning("runtime mirror sync failed", exc_info=True)
         return next_state
 
 

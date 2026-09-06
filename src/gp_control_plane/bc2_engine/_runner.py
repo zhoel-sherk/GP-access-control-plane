@@ -1,6 +1,7 @@
 """bc2_engine._runner — moved from strategy_finder.py / blockchecks_backend.py."""
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from pathlib import Path
@@ -26,9 +27,32 @@ from gp_control_plane.engine_common._options import (
 from gp_control_plane.engine_common._retention import _cleanup_old_strategy_logs, _finder_dir
 from gp_control_plane.engine_common._runmeta import _discovery_run_id, _ipvs_value
 from gp_control_plane.engine_common._upsert import candidate_total, upsert_candidates
+from gp_control_plane.runtime import enrich_active_run
 from gp_control_plane.state import now_iso
 from gp_control_plane.storage import append_run
 from gp_control_plane.zapret2 import BLOCKCHECK_ENV_KEYS
+
+log = logging.getLogger(__name__)
+
+
+def _enrich_runtime_record(state_dir: Path, started: dict[str, Any], engine: str) -> None:
+    try:
+        enrich_active_run(
+            state_dir,
+            run_id=str(started.get("id") or ""),
+            engine=engine,
+            kind=str(started.get("kind") or ""),
+            domains=list(started.get("domains") or []),
+            phase=str(started.get("phase") or ""),
+            started_at=str(started.get("started_at") or ""),
+            log_paths={
+                key: str(started[key])
+                for key in ("stdout_log", "stderr_log", "progress_log", "metrics_log")
+                if started.get(key)
+            },
+        )
+    except Exception:  # noqa: BLE001 — runtime mirror must never break the run
+        log.warning("runtime enrich failed", exc_info=True)
 
 
 def _run_blockcheck_live(
@@ -112,6 +136,7 @@ def _run_blockcheck_live(
         "attempt_plan": attempt_plan,
     }
     append_run(state_dir, started)
+    _enrich_runtime_record(state_dir, started, engine="blockcheck2")
 
     recorder = _LiveStdoutRecorder(state_dir, started)
     command = _root_command_unless_stopped(
@@ -318,6 +343,7 @@ def _run_blockcheck_command_live(
         "attempt_plan": attempt_plan,
     }
     append_run(state_dir, started)
+    _enrich_runtime_record(state_dir, started, engine="blockcheck2")
 
     recorder = _LiveStdoutRecorder(state_dir, started)
     process_result = _run_process_with_live_stdout(

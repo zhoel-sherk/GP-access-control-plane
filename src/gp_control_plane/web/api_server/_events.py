@@ -13,8 +13,10 @@ from gp_control_plane.config import AppConfig
 from gp_control_plane.engine_common import (
     candidate_storage_version,
     latest_log_tail,
+    latest_log_tail_for_run,
     read_runs,
 )
+from gp_control_plane.runtime import read_runtime
 from gp_control_plane.settings import read_run_settings, read_settings
 from gp_control_plane.state import current_run_from_state, now_iso, read_state
 from gp_control_plane.storage import (
@@ -138,7 +140,35 @@ def _runs_event_payload(state_dir: Path) -> dict[str, Any]:
     return {"count": len(runs), "version": _event_fingerprint(compact)}
 
 
+def _runtime_as_run(runtime: dict[str, Any]) -> dict[str, Any]:
+    log_paths = runtime.get("log_paths") if isinstance(runtime.get("log_paths"), dict) else {}
+    return {
+        "id": runtime.get("run_id"),
+        "kind": runtime.get("kind"),
+        "status": runtime.get("status"),
+        "discovery_engine": runtime.get("engine"),
+        "domains": runtime.get("domains") or [],
+        "stdout_log": log_paths.get("stdout_log"),
+        "stderr_log": log_paths.get("stderr_log"),
+        "progress_log": log_paths.get("progress_log"),
+        "metrics_log": log_paths.get("metrics_log"),
+    }
+
+
 def _log_event_payload(state_dir: Path) -> dict[str, Any]:
+    runtime = read_runtime(state_dir)
+    if runtime.get("active"):
+        run = _runtime_as_run(runtime)
+        stdout_log = _optional_path(run.get("stdout_log"))
+        if stdout_log is not None:
+            return {
+                "run_id": runtime.get("run_id"),
+                "status": runtime.get("status"),
+                "stdout": _path_version(stdout_log),
+                "stderr": _path_version(_optional_path(run.get("stderr_log"))),
+                "progress": _path_version(_optional_path(run.get("progress_log"))),
+                "metrics": _path_version(_optional_path(run.get("metrics_log"))),
+            }
     for run in reversed(read_runs(state_dir, limit=20)):
         stdout_log = Path(str(run.get("stdout_log") or ""))
         if not stdout_log.is_file():
@@ -185,9 +215,40 @@ def _latest_log_payload(config: AppConfig, query: dict[str, list[str]]) -> dict[
 
 
 def _current_run_latest_log_payload(config: AppConfig, query: dict[str, list[str]]) -> dict[str, Any]:
-    state = read_state(config.output.state_dir)
+    state_dir = config.output.state_dir
+    runtime = read_runtime(state_dir)
+    if runtime.get("active"):
+        run = _runtime_as_run(runtime)
+        if run.get("stdout_log"):
+            payload = latest_log_tail_for_run(
+                run,
+                stdout_from_size=_query_int(query, "stdout_size", -1),
+                stdout_log_match=_query_one(query, "stdout_log"),
+                stderr_from_size=_query_int(query, "stderr_size", -1),
+                stderr_log_match=_query_one(query, "stderr_log"),
+            )
+            if payload is not None:
+                return payload
+            return {
+                "run_id": runtime.get("run_id"),
+                "kind": runtime.get("kind"),
+                "status": runtime.get("status"),
+                "stdout_tail": "",
+                "stdout_append": "",
+                "stderr_tail": "",
+                "stderr_append": "",
+                "stderr_diagnostics": [],
+                "stdout_log": run.get("stdout_log") or "",
+                "stderr_log": run.get("stderr_log") or "",
+                "stdout_size": 0,
+                "stderr_size": 0,
+                "progress": {},
+                "metrics": {},
+                "run_settings": {},
+            }
+    state = read_state(state_dir)
     return latest_log_tail(
-        config.output.state_dir,
+        state_dir,
         run_id=str(state.get("current_run_id") or ""),
         stdout_from_size=_query_int(query, "stdout_size", -1),
         stdout_log_match=_query_one(query, "stdout_log"),
