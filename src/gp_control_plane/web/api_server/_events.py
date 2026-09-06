@@ -25,7 +25,6 @@ from gp_control_plane.storage import (
 )
 from gp_control_plane.web.api_server._helpers import (
     _bounded_int,
-    _query_int,
     _query_one,
     _query_str,
 )
@@ -207,10 +206,6 @@ def _latest_log_payload(config: AppConfig, query: dict[str, list[str]]) -> dict[
     return latest_log_tail(
         config.output.state_dir,
         run_id=_query_one(query, "run_id"),
-        stdout_from_size=_query_int(query, "stdout_size", -1),
-        stdout_log_match=_query_one(query, "stdout_log"),
-        stderr_from_size=_query_int(query, "stderr_size", -1),
-        stderr_log_match=_query_one(query, "stderr_log"),
     )
 
 
@@ -220,13 +215,7 @@ def _current_run_latest_log_payload(config: AppConfig, query: dict[str, list[str
     if runtime.get("active"):
         run = _runtime_as_run(runtime)
         if run.get("stdout_log"):
-            payload = latest_log_tail_for_run(
-                run,
-                stdout_from_size=_query_int(query, "stdout_size", -1),
-                stdout_log_match=_query_one(query, "stdout_log"),
-                stderr_from_size=_query_int(query, "stderr_size", -1),
-                stderr_log_match=_query_one(query, "stderr_log"),
-            )
+            payload = latest_log_tail_for_run(run)
             if payload is not None:
                 return payload
             return {
@@ -250,10 +239,6 @@ def _current_run_latest_log_payload(config: AppConfig, query: dict[str, list[str
     return latest_log_tail(
         state_dir,
         run_id=str(state.get("current_run_id") or ""),
-        stdout_from_size=_query_int(query, "stdout_size", -1),
-        stdout_log_match=_query_one(query, "stdout_log"),
-        stderr_from_size=_query_int(query, "stderr_size", -1),
-        stderr_log_match=_query_one(query, "stderr_log"),
     )
 
 

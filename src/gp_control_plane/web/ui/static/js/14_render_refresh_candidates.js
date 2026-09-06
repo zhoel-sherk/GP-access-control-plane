@@ -306,45 +306,9 @@ function scheduleCandidateRefresh(){
     }
   }, 350);
 }
-function trimTextLines(text, maxLines){
-  const lines = String(text || '').split('\n');
-  if (lines.length <= maxLines) return lines.join('\n');
-  return lines.slice(lines.length - maxLines).join('\n');
-}
-function appendLogText(base, addition){
-  const left = String(base || '');
-  const right = String(addition || '');
-  if (!left || !right || left.endsWith('\n') || right.startsWith('\n')) return left + right;
-  return `${left}\n${right}`;
-}
-function latestLogUrl(incremental){
+function latestLogUrl(){
   const busy = isBusy();
-  const base = busy ? apiEndpoint('core', 'currentRunLatestLog') : apiEndpoint('core', 'latestLog');
-  if (!incremental || !state.finderLog || !state.finderLog.stdout_log) {
-    return base;
-  }
-  const params = new URLSearchParams();
-  params.set('stdout_log', state.finderLog.stdout_log || '');
-  params.set('stdout_size', String(state.finderLog.stdout_size || 0));
-  params.set('stderr_log', state.finderLog.stderr_log || '');
-  params.set('stderr_size', String(state.finderLog.stderr_size || 0));
-  return `${base}?${params.toString()}`;
-}
-function mergeLogPayload(previous, next){
-  if (!previous || !next) return next;
-  if (next.progress) next.progress.received_at_ms = Date.now();
-  const sameRun = previous.run_id && next.run_id && previous.run_id === next.run_id;
-  const sameStdout = sameRun && previous.stdout_log && previous.stdout_log === next.stdout_log;
-  const sameStderr = sameRun && previous.stderr_log && previous.stderr_log === next.stderr_log;
-  if (sameStdout && next.stdout_append) {
-    next.stdout_tail = trimTextLines(appendLogText(previous.stdout_tail, next.stdout_append), 200);
-  }
-  if (sameStderr && next.stderr_append) {
-    next.stderr_tail = trimTextLines(appendLogText(previous.stderr_tail, next.stderr_append), 200);
-  }
-  if (sameStdout && !next.stdout_tail && !next.stdout_append) next.stdout_tail = previous.stdout_tail || '';
-  if (sameStderr && !next.stderr_tail && !next.stderr_append) next.stderr_tail = previous.stderr_tail || '';
-  return next;
+  return busy ? apiEndpoint('core', 'currentRunLatestLog') : apiEndpoint('core', 'latestLog');
 }
 function mergeStatusPayload(status){
   if (!status) return false;
@@ -377,14 +341,13 @@ async function refreshRuns(reset = true){
     setMessage(`Ошибка обновления истории: ${error.message}`, 'bad');
   }
 }
-async function refreshLog(incremental = false){
+async function refreshLog(){
   if (logRefreshInFlight) return;
   logRefreshInFlight = true;
   try {
-    const previous = state.finderLog;
-    const payload = await getJson(latestLogUrl(incremental));
+    const payload = await getJson(latestLogUrl());
     if (payload.progress) payload.progress.received_at_ms = Date.now();
-    state.finderLog = incremental ? mergeLogPayload(previous, payload) : payload;
+    state.finderLog = payload;
     logDirty = false;
     renderLog();
     renderMetrics();
